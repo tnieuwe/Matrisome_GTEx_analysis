@@ -1,0 +1,607 @@
+---
+title: "Protein Gene Correlations GTEx"
+author: "Tim Nieuwenhuis"
+date: "12/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(genpwr)
+library(EnvStats)
+```
+Load raw files
+```{r}
+## Protein log2 normalized coutns
+protein_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc3.xlsx",sheet = 6,skip = 0)
+
+## Gene log2 normalized tpms
+gene_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc4.xlsx",sheet = 2,skip = 0)
+
+# Protein TS scores used to pull ensembl_id to hgnc_symbol
+hgnc_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc3.xlsx",sheet = 8,skip = 0)
+hgnc_filt <- hgnc_raw[-1:-2, c(1,4)]
+colnames(hgnc_filt) <- hgnc_raw[2, c(1,4)]
+
+## Load in their correlations across tissues
+corr_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc5.xlsx",sheet = 2,skip = 1, col_types = "guess")
+corr_select <- select(corr_raw, Gene, Ensembl, spearman_cor_across_tissue, pval_spearman_cor_across_tissue) %>%
+    mutate(pval_spearman_cor_across_tissue = as.numeric(pval_spearman_cor_across_tissue),
+           spearman_cor_across_tissue = as.numeric(spearman_cor_across_tissue))
+
+## Read in matrisome csv
+matrisome <- read.csv("../global_in/matrisome_hs_masterlist_EDIT_r.csv",fileEncoding = "UTF-8-BOM")
+core_matrisome <- matrisome %>% filter(Division == "Core matrisome" | Category == "ECM Regulators")
+
+hgnc_matrisome <- filter(hgnc_filt, hgnc_symbol %in% core_matrisome$Gene.Symbol)
+```
+Turn gene and protein data.frames into workable R data.frames
+```{r}
+## For protein
+## Pull sample data and put it in a phenotype_data format
+prot_all_samps <-  as.data.frame(t(protein_raw[2:3,-1:-2]))[,c(2, 1)]
+prot_all_genes <- protein_raw[-1:-3, 1:2]
+colnames(prot_all_samps) <- c("SAMPID", "SMTSD")
+## Make subjids
+prot_all_samps$SUBJID <- str_extract(prot_all_samps$SAMPID, "GTEX\\-[A-Za-z0-9]{4,5}")
+prot_all_samps$name_tiss <- paste(prot_all_samps$SUBJID, prot_all_samps$SMTSD, sep = "-")
+rownames(prot_all_samps) <- prot_all_samps$SAMPID
+colnames(prot_all_genes) <- protein_raw[3, 1:2]
+prot_df  <- protein_raw[-1:-3, -1:-2]
+prot_df <- as.data.frame(prot_df)
+## Get rid of NAs and make numeric
+prot_df[prot_df == "NA"] <- NA
+prot_df[] <- sapply(prot_df, as.numeric)
+colnames(prot_df) <- prot_all_samps$SAMPID
+rownames(prot_df) <- prot_all_genes$gene.id.full
+prot_matrix <- as.matrix(prot_df)
+
+##For Genes
+gene_all_samps <- as.data.frame(t(gene_raw[2:3,-1:-2]))[,c(2, 1)]
+colnames(gene_all_samps) <- c("SAMPID", "SMTSD")
+## Make SUBJIDS
+gene_all_samps$SUBJID <- str_extract(gene_all_samps$SAMPID, "GTEX\\-[A-Za-z0-9]{4,5}")
+gene_all_samps$name_tiss <- paste(gene_all_samps$SUBJID, gene_all_samps$SMTSD, sep = "-")
+gene_all_genes <- gene_raw[-1:-3, 1:2]
+colnames(gene_all_genes) <- gene_raw[3, 1:2]
+gene_df  <- gene_raw[-1:-3, -1:-2]
+## Get rid of NAs and make numeric
+gene_df[gene_df == "NA"] <- NA
+gene_df[] <- sapply(gene_df, as.numeric)
+## Make DF not data.frame
+gene_df <- as.data.frame(gene_df)
+colnames(gene_df) <- gene_all_samps$SAMPID
+rownames(gene_df) <- gene_all_genes$gene.id.full
+gene_matrix <- as.matrix(gene_df)
+
+```
+
+Compare the two datasets and pair down to shared sample sources
+```{r}
+hist(prot_matrix)
+hist(prot_matrix[prot_matrix !=0])
+
+sum(prot_matrix %in% 0)
+
+hist(gene_matrix)
+
+
+missing_prot_ind <- prot_all_samps$name_tiss %in% gene_all_samps$name_tiss
+prot_all_samps[!missing_prot_ind,]
+missing_gene_ind <- gene_all_samps$name_tiss %in% prot_all_samps$name_tiss
+gene_all_samps[!missing_gene_ind,]
+
+
+unique(prot_all_samps$SUBJID)
+unique(prot_all_samps$SUBJID)
+
+setdiff(unique(prot_all_samps$SUBJID), unique(gene_all_samps$SUBJID))
+## For some reason the genes lack GTEX-XUJ4, but I'm not sure why its gone
+## Remove that individual and see who is left
+prot_filt_samps <- filter(prot_all_samps, SUBJID != "GTEX-XUJ4")
+
+## Search for differences
+
+## Below are samples I can not find matches for
+paste(setdiff(unique(prot_filt_samps$name_tiss),
+               unique(gene_all_samps$name_tiss)),
+       setdiff( unique(gene_all_samps$name_tiss),
+                unique(prot_filt_samps$name_tiss)), sep = ", ")
+
+ ## Filter down to only the shared samples
+shared_samps <- intersect(prot_filt_samps$name_tiss, gene_all_samps$name_tiss)
+
+prot_filt_samps <- filter(prot_filt_samps, name_tiss %in%  shared_samps)
+gene_filt_samps <- filter(gene_all_samps, name_tiss %in%  shared_samps)
+
+
+prot_df_filt <- prot_df[,colnames(prot_df) %in%  prot_filt_samps$SAMPID]
+gene_df_filt <- gene_df[,colnames(gene_df) %in%  gene_filt_samps$SAMPID]
+
+#table(prot_filt_samps$SMTSD)
+```
+
+Pair down to shared genes
+```{r}
+nrow(prot_all_genes) ; nrow(gene_all_genes)
+sum(prot_all_genes$gene.id.full %in%  gene_all_genes$gene.id.full)
+sum(prot_all_genes$gene.id %in%  gene_all_genes$gene.id)
+
+sum(table(gene_all_genes$gene.id) > 1)
+
+## For now I'm just going to remove these duplicates because I just don't feel like dealing with this malarky right now
+
+gene_all_genes_uni <- gene_all_genes
+gene_all_genes_uni$gene.id <- make.unique(gene_all_genes$gene.id)
+
+prot_all_genes_uni <- prot_all_genes
+prot_all_genes_uni$gene.id <- make.unique(prot_all_genes$gene.id)
+
+length(setdiff(prot_all_genes_uni$gene.id, gene_all_genes_uni$gene.id))
+length(setdiff(gene_all_genes_uni$gene.id, prot_all_genes_uni$gene.id))
+
+## Filter down to shared genes
+shared_genes <- intersect(prot_all_genes_uni$gene.id, gene_all_genes_uni$gene.id)
+
+prot_filt_genes_uni <- prot_all_genes_uni[prot_all_genes_uni$gene.id %in% shared_genes,]
+gene_filt_genes_uni <- gene_all_genes_uni[gene_all_genes_uni$gene.id %in% shared_genes,]
+
+## FIlter down the data.frames
+prot_df_filt <- prot_df_filt[(rownames(prot_df_filt) %in% prot_filt_genes_uni$gene.id.full),]
+
+gene_df_filt <- gene_df_filt[(rownames(gene_df_filt) %in% gene_filt_genes_uni$gene.id.full),]
+
+## Change rownames from full ids to short IDs
+## Make sure all match
+sum(rownames(prot_df_filt) == prot_filt_genes_uni$gene.id.full) == nrow(prot_df_filt)
+rownames(prot_df_filt) <- prot_filt_genes_uni$gene.id
+rownames(gene_df_filt) <- gene_filt_genes_uni$gene.id
+```
+
+
+
+Correlate all samples
+```{r}
+
+## Have rownames match
+ind <- match(rownames(prot_df_filt), rownames(gene_df_filt))
+sum(rownames(gene_df_filt[ind,]) %in% rownames(prot_df_filt)) == nrow(prot_df_filt)
+gene_df_filt <- gene_df_filt[ind,]
+
+## For loop pairing each sample in a list as a data.frame
+k = 1
+all_gene_list <- list()
+all_gene_cor_list <- list()
+matrisome_gene_list <- list()
+matrisome_gene_cor_list <- list()
+matrisome_gene_list_clean<- list()
+matrisome_gene_cor_list_clean <- list()
+for (k in seq(nrow(prot_filt_samps))) {
+    temp_nametiss <- prot_filt_samps[k, "name_tiss"]
+    protein_samp <- prot_filt_samps[k, "SAMPID"]
+    
+    gene_ind <- gene_filt_samps$name_tiss == temp_nametiss
+    gene_samp <- gene_filt_samps[gene_ind, "SAMPID"]
+    
+    ## Pull out protein sample and then gene sample
+    temp_prot <- prot_df_filt[,protein_samp,drop=F]
+    temp_gene <- gene_df_filt[,gene_samp,drop=F]
+    
+    joined_temp <- cbind(temp_prot, temp_gene)
+    
+    joined_mat <- joined_temp[rownames(joined_temp) %in% hgnc_matrisome$ensembl_id,]
+    
+    joined_mat_clean <- joined_mat[!is.na(joined_mat[,1]) | joined_mat[,1] %in% 0 ,]
+    
+    all_gene_list[[temp_nametiss]] <- joined_temp
+    matrisome_gene_list[[temp_nametiss]] <- joined_mat
+    matrisome_gene_list_clean[[temp_nametiss]] <- joined_mat_clean
+    ## Correlations
+    all_gene_cor <- cor.test(joined_temp[,1], joined_temp[,2],method = "spearman")
+    matrisome_gene_cor <- cor.test(joined_mat[,1], joined_mat[,2],method = "spearman")
+    matrisome_gene_cor_clean <- cor.test(joined_mat_clean[,1], joined_mat_clean[,2],method = "spearman")
+    # no_na_ind <- !is.na(joined_mat[,1])
+    # temp_mat_nona <- joined_mat[no_na_ind,]
+    all_gene_cor_list[[temp_nametiss]] <- all_gene_cor
+    matrisome_gene_cor_list[[temp_nametiss]] <- matrisome_gene_cor
+    matrisome_gene_cor_list_clean[[temp_nametiss]] <- matrisome_gene_cor_clean
+}
+
+list_na <- lapply(matrisome_gene_list, function(x){
+            sum(!is.na(x[,1]))
+        })
+
+summary(unlist(list_na))
+
+mat_rhos <- lapply(matrisome_gene_cor_list, function(x){
+                    x$estimate
+                })
+
+hist(unlist(mat_rhos))
+
+
+mat_rhos_clean <- lapply(matrisome_gene_cor_list_clean, function(x){
+                    x$estimate
+                })
+
+hist(unlist(mat_rhos_clean))
+
+
+
+non_mat_rhos <- lapply(all_gene_cor_list, function(x){
+                    x$estimate
+                })
+
+hist(unlist(non_mat_rhos))
+
+
+
+bound_rho <- as.data.frame(cbind(unlist(non_mat_rhos), unlist(mat_rhos)))
+colnames(bound_rho) <- c("all_genes", "mat_genes")
+bound_rho <- rownames_to_column(bound_rho, var = "name_tiss")
+library(reshape2)
+library(ggforce)
+melt_rho <- melt(bound_rho)
+
+
+ggplot(melt_rho, aes(x = variable, y = value)) +
+    geom_boxplot() +
+    geom_sina() +
+    xlab("All Genes or Matrisome") +
+    ylab("Spearman's Rho")
+```
+
+
+See how their correlation comparisons went
+```{r}
+
+mat_joiner <- core_matrisome %>% select(Gene = Gene.Symbol, Division, Category)
+
+corr_select <- left_join(corr_select, mat_joiner)
+
+corr_select <- mutate(corr_select, in_mat = ifelse(Gene %in% core_matrisome$Gene.Symbol,
+                                                   "Matrisome", "Not Matrisome"),
+                     Category = ifelse(is.na(Category), "Not Matrisome", Category))
+
+corr_select_mat <- filter(corr_select, in_mat == "Matrisome")
+
+hist(corr_select_mat$pval_spearman_cor_across_tissue)
+
+
+hist(corr_select_mat$spearman_cor_across_tissue)
+hist(corr_select$spearman_cor_across_tissue)
+
+
+ggplot(corr_select, aes(x = Category, y = spearman_cor_across_tissue)) +
+    geom_sina(aes(color = Category),alpha = .6) + 
+    geom_boxplot(width = .4, color = "red",outlier.size = -1) +
+    geom_hline(yintercept = 0, color = "blue") +
+    coord_flip() +
+    theme_classic() +
+    theme(legend.position = "none") +
+    labs(title = "Across Tissue Spearman Correlations for Genes Detected") +
+    ylab("Spearman Correlation Across Tissues") + 
+    xlab("Gene assocaition")  +
+    stat_n_text(y.pos = -1.1) +
+    ylim(-1.2, 1.1)
+    
+ggsave(filename = "data_out/across_tissue_correlations_SFIG1B.pdf")
+corr_select %>% filter(Category == "Collagens") %>%  arrange(desc(spearman_cor_across_tissue))
+
+corr_select$Category <- factor(corr_select$Category,
+                               levels =unique(corr_select$Category))
+
+## Running a linear model
+
+model_1 <- lm(spearman_cor_across_tissue ~ Category, data = corr_select)
+summary(model_1)
+
+
+## Data is non-normal switching to man whitney u
+
+wilcox.test(spearman_cor_across_tissue ~ in_mat, data= corr_select)
+pvals <- list()
+whit_stats <- list()
+for (category in unique(corr_select$Category)[-1]) {
+   ind <- corr_select$Category %in% c(category, "Not Matrisome")
+   temp_select <- corr_select[ind,]
+   #print(category)
+   temp_test <- wilcox.test(spearman_cor_across_tissue ~ Category,
+                             data= temp_select)
+   pvals[[category]] <-temp_test$p.value 
+   whit_stats[[category]] <- temp_test$statistic
+}
+p.adjust(pvals, method = "holm")
+whit_stats
+```
+Our attempt at correlating all genes
+
+```{r}
+
+##Need to label data files to pair data toi get correlations
+prot_filt_samps
+prot_df_gencor <- prot_df_filt
+
+colnames(prot_df_gencor) <- prot_filt_samps$name_tiss[match(colnames(prot_df_gencor), prot_filt_samps$SAMPID)]
+## Genes
+gene_df_gencor <- gene_df_filt
+
+colnames(gene_df_gencor) <- gene_filt_samps$name_tiss[match(colnames(gene_df_gencor), gene_filt_samps$SAMPID)]
+```
+
+```{r}
+## For loop pairing each sample in a list as a data.frame
+k = 1
+gene_pairs_list <- list()
+gene_pair_rho_list <- list()
+for (k in seq(nrow(prot_df_filt))) {
+    gene_name <- rownames(prot_df_filt)[k]
+    ## Pull out protein sample and then gene sample
+    temp_prot <- prot_df_gencor[gene_name,,drop=T]
+    temp_gene <- gene_df_gencor[gene_name,,drop=T]
+    
+    ##Order samples
+    temp_gene <- temp_gene[,match(colnames(temp_prot), colnames(temp_gene))]
+    
+    joined_temp <- cbind(temp_prot, temp_gene)
+    
+    joined_mat <- joined_temp[rownames(joined_temp) %in% hgnc_matrisome$ensembl_id,]
+    
+    joined_mat_clean <- joined_mat[!is.na(joined_mat[,1]) | joined_mat[,1] %in% 0 ,]
+    
+    all_gene_list[[temp_nametiss]] <- joined_temp
+    matrisome_gene_list[[temp_nametiss]] <- joined_mat
+    matrisome_gene_list_clean[[temp_nametiss]] <- joined_mat_clean
+    ## Correlations
+    all_gene_cor <- cor.test(joined_temp[,1], joined_temp[,2],method = "spearman")
+    matrisome_gene_cor <- cor.test(joined_mat[,1], joined_mat[,2],method = "spearman")
+    matrisome_gene_cor_clean <- cor.test(joined_mat_clean[,1], joined_mat_clean[,2],method = "spearman")
+    # no_na_ind <- !is.na(joined_mat[,1])
+    # temp_mat_nona <- joined_mat[no_na_ind,]
+    all_gene_cor_list[[temp_nametiss]] <- all_gene_cor
+    matrisome_gene_cor_list[[temp_nametiss]] <- matrisome_gene_cor
+    matrisome_gene_cor_list_clean[[temp_nametiss]] <- matrisome_gene_cor_clean
+}
+
+```
+
+
+
+```{r}
+rho_mat_df <- data.frame(t(data.frame(mat_rhos))) %>% rownames_to_column("name_tiss")
+rho_mat_df$name_tiss <- names(mat_rhos) 
+
+joined_row <- left_join(rho_mat_df, gene_filt_samps)
+
+ggplot(joined_row, aes(x = SMTSD, y = rho)) +
+    geom_boxplot(outlier.size = -1) +
+    geom_point() +
+    coord_flip()
+```
+
+
+Function to find outliers and graph the outliers of the data
+
+```{r}
+current_df <- matrisome_gene_list[[4]]
+current_df <- all_gene_list[[4]]
+colnames(current_df) <- c("Protein", "Gene")
+
+ggplot(current_df, aes(x = Protein, y = Gene)) +
+    geom_hex()
+
+no_prot_0 <- filter(current_df, Protein != 0)
+
+ggplot(current_df, aes(x = Protein)) +
+    geom_histogram() +
+    labs(title = "With 0s")
+ggplot(no_prot_0, aes(x = Protein)) +
+    geom_histogram()+
+    labs(title = "Without 0s")
+ggplot(current_df, aes(x = Gene)) +
+    geom_histogram()
+```
+
+
+Understand 0s and NAs
+```{r}
+gene_ids <- c("ENSG00000002746.10", "ENSG00000001461.12")
+
+## Protein log2 normalized coutns
+protein_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc3.xlsx",sheet = 6,skip = 0)
+protein_normed <- protein_raw[-1:-2,]
+colnames(protein_normed) <- protein_normed[1,]
+protein_normed <- protein_normed[-1,]
+norm_two_rows <- protein_normed[protein_normed$gene.id.full %in% gene_ids,]
+
+
+protein_raw_ref <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc3.xlsx",sheet = 5,skip = 0)
+protein_ref <- protein_raw_ref[-1:-2,]
+colnames(protein_ref) <- protein_ref[1,]
+protein_ref <- protein_ref[-1,]
+ref_two_rows <- protein_ref[protein_ref$gene.id.full %in% gene_ids,]
+
+sample_counts <- table(colnames(ref_two_rows[,-1:-2]))
+
+ref_two_rows[,rep("GTEX-XUJ4-2626-SM-9KI57", 3)]
+
+## Need to find a way to publicate a row for someone
+k = 1
+hold_df <- norm_two_rows
+for (k in seq(length(sample_counts))) {
+    
+    samp_n <- sample_counts[k]
+    samp_name <- names(samp_n)
+    samp_n <- unname(samp_n)
+    if (samp_name == "reference") {
+        ref_mat <- matrix(nrow = 2, ncol = samp_n,data = NA)
+        colnames(ref_mat) <- rep("reference", samp_n)
+        hold_df <- cbind(hold_df,ref_mat)
+    }
+    
+    hold_df <- cbind(hold_df, matrix(rep(hold_df[[samp_name]], samp_n -1),nrow = 2, ncol = samp_n - 1))
+    colnames(hold_df)[(ncol(hold_df)-(samp_n-2)):ncol(hold_df)] <- samp_name
+}
+hold_df[,(ncol(hold_df) -2):ncol(hold_df)]
+samp_name
+held_df <- hold_df
+
+ref_two_rows_uni <- ref_two_rows
+colnames(ref_two_rows_uni) <- make.unique(colnames(ref_two_rows))
+colnames(held_df) <- make.unique(colnames(held_df))
+
+sum(colnames(ref_two_rows_uni) %in% colnames(held_df))/ncol(ref_two_rows_uni)
+held_df_filt <- held_df[,colnames(held_df) %in% colnames(ref_two_rows_uni)]
+held_df_mat <- t(held_df_filt[,-1:-2])
+colnames(held_df_mat) <- c("gene_1_norm", "gene_2_norm")
+ref_two_mat <- t(ref_two_rows_uni[,-1:-2])
+colnames(ref_two_mat) <- c("gene_1_ref", "gene_2_ref")
+held_df_mat_ord <- held_df_mat[match(rownames(ref_two_mat),rownames(held_df_mat)),]
+
+bound_data <- (cbind(ref_two_mat, held_df_mat_ord))
+
+View(bound_data[order(rownames(bound_data)),order(colnames(bound_data))])
+
+```
+Tables for mark
+```{r}
+prot_filt_samps
+
+
+prot_df_4marc <- prot_df_filt %>% rownames_to_column(var = "ensembl_id")
+prot_df_4marc <- left_join(prot_df_4marc, hgnc_filt) %>% select(ensembl_id, hgnc_symbol, everything())
+
+gene_df_4marc <- gene_df_filt %>% rownames_to_column(var = "ensembl_id")
+gene_df_4marc <- left_join(gene_df_4marc, hgnc_filt) %>% select(ensembl_id, hgnc_symbol, everything())
+
+
+write.csv(prot_df_4marc, "data_out/protein_norm_data.csv", row.names = F)
+write.csv(gene_df_4marc, "data_out/gene_norm_data.csv", row.names = F)
+
+write.csv(prot_filt_samps, "data_out/samp_dat_genenprotein.csv",row.names = F)
+```
+
+Pulling a representative sample
+```{r}
+tissues <- c("Lung", "Liver", "Stomach", "Colon - Sigmoid", "Prostate", "Heart - Left Ventricle")
+
+set.seed(123)
+
+to_pull <- prot_filt_samps %>% filter(SMTSD %in% tissues) %>%
+    group_by(SMTSD) %>%
+  slice_sample(n = 1)
+
+to_pull <- to_pull[match(tissues, to_pull$SMTSD),]
+
+```
+
+Join the randomly sample tissues samples 
+```{r}
+random_prot <- prot_df_gencor[, to_pull$name_tiss]
+colnames(random_prot) <- paste0(colnames(random_prot), " - protein")
+random_prot <- rownames_to_column(random_prot, "Gene.ID")
+
+
+random_gene <- gene_df_gencor[, to_pull$name_tiss]
+colnames(random_gene) <- paste0(colnames(random_gene), " - gene")
+random_gene <- rownames_to_column(random_gene, "Gene.ID")
+
+joined_rand <- left_join(random_prot, random_gene)
+
+```
+Read in Wang data
+
+```{r}
+wang_tissues <- c("Lung", "Liver", "Stomach", "Colon", "Prostate", "Heart")
+
+wang_prot <- read.csv("../../protein_gene_corr/data_out/protein_Wang_etal_log10.csv") %>%
+    select(Gene.ID, Gene.name, contains(wang_tissues))
+num_ind <- sapply(wang_prot, is.numeric)
+colnames(wang_prot)[num_ind] <- paste0(colnames(wang_prot)[num_ind], " - protein")
+
+wang_gene <- read.csv("../../protein_gene_corr/data_out/gene_Wang_etal_log10.csv")%>%
+    select(Gene.ID, Gene.name, contains(wang_tissues))
+num_ind <- sapply(wang_gene, is.numeric)
+colnames(wang_gene)[num_ind] <- paste0(colnames(wang_gene)[num_ind], " - gene")
+
+wang_join <- left_join(wang_prot, wang_gene) 
+
+
+
+```
+
+```{r}
+library(pheatmap)
+master_join <- left_join(joined_rand, wang_join) %>% select(Gene.ID, Gene.name, everything()) %>%
+            ## Make sure as much genes are shareed
+            filter(!is.na(Gene.name))
+
+master_matrix <- as.matrix(master_join[,-1:-2])
+rownames(master_matrix) <- master_join$Gene.name
+
+##Reorder matrix names
+
+
+## Optionall replace 0s with NAs
+master_matrix[master_matrix == 0] <- NA
+
+##
+cor_master <- cor(master_matrix, method = "spearman", use="complete.obs")
+
+
+pheatmap(cor_master,
+         filename = "data_out/gene_protein_corr_heatmap_clust.pdf", width = 8, height = 8)
+
+pheatmap(cor_master,cluster_rows = F, cluster_cols = F,
+         filename = "data_out/gene_protein_corr_heatmap_noclust.pdf", width = 8, height = 8)
+
+
+## Now matrisome
+master_join_mat <- left_join(joined_rand, wang_join) %>% select(Gene.ID, Gene.name, everything()) %>%
+            ## Make sure as much genes are shareed
+            filter(!is.na(Gene.name), Gene.name %in% core_matrisome$Gene.Symbol) 
+
+master_mat_matrix <- as.matrix(master_join_mat[,-1:-2])
+rownames(master_mat_matrix) <- master_join_mat$Gene.name
+master_mat_matrix[master_mat_matrix == 0] <- NA
+
+
+
+cor_master_matrisome <- cor(master_mat_matrix, method = "spearman", use="complete.obs")
+
+pheatmap(cor_master_matrisome,cluster_rows = F, cluster_cols = F,
+         filename = "data_out/gene_protein_corr_matrisome_heatmap_noclust.pdf", width = 8, height = 8)
+
+```
+
+
+```{r}
+
+```
+
+
+Answer liver question
+```{r}
+wang_liver_mat <- wang_join %>% select(Gene.ID, Gene.name, contains("Liver")) %>%
+    filter(Gene.name %in% core_matrisome$Gene.Symbol)
+colnames(wang_liver_mat)[2] <- "Gene"
+
+wang_liver_mat <- left_join(wang_liver_mat, mat_joiner)
+wang_liver_mat_no_0 <- left_join(wang_liver_mat, mat_joiner) %>%
+    filter(`Liver - protein` != 0,
+           `Liver - gene` != 0)
+
+
+cor.test(wang_liver_mat_no_0$`Liver - protein`, wang_liver_mat_no_0$`Liver - gene`,
+         method = "spearman")
+
+
+ggplot(wang_liver_mat, aes(`Liver - protein`, `Liver - gene`)) +
+    geom_point()
+
+
+ggplot(wang_liver_mat_no_0, aes(`Liver - protein`, `Liver - gene`)) +
+    geom_point()
+```
+

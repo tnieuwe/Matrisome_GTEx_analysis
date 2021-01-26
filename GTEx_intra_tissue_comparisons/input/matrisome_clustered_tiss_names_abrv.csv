@@ -1,0 +1,56 @@
+official_name,r_names,abrreviated
+Liver,liver,LIVER
+Whole Blood,whole_blood,BLOOD
+Cells - EBV-transformed lymphocytes,cells_ebv_transformed_lymphocytes,LCL
+Brain - Cerebellum,brain_cerebellum,BRNCER
+Brain - Cerebellar Hemisphere,brain_cerebellar_hemisphere,BRNCEH
+Brain - Spinal cord (cervical c-1),brain_spinal_cord__cervical_c_1,BRNSPC
+Brain - Substantia nigra,brain_substantia_nigra,BRNSSN
+Brain - Anterior cingulate cortex (BA24),brain_anterior_cingulate_cortex__ba24,BRNACC
+Brain - Cortex,brain_cortex,BRNCOR
+Brain - Frontal Cortex (BA9),brain_frontal_cortex__ba9,BRNFRC
+Brain - Nucleus accumbens (basal ganglia),brain_nucleus_accumbens__basal_ganglia,BRNNUA
+Brain - Caudate (basal ganglia),brain_caudate__basal_ganglia,BRNCAU
+Brain - Putamen (basal ganglia),brain_putamen__basal_ganglia,BRNPUT
+Brain - Hypothalamus,brain_hypothalamus,BRNHYP
+Brain - Hippocampus,brain_hippocampus,BRNHIP
+Brain - Amygdala,brain_amygdala,BRNAMY
+Brain,brain,BRAIN
+Testis,testis,TESTIS
+Cells - Cultured fibroblasts,cells_cultured_fibroblasts,FIBRBLS
+Pituitary,pituitary,PTTARY
+Spleen,spleen,SPLEEN
+Minor Salivary Gland,minor_salivary_gland,SLVGLND
+Skin - Not Sun Exposed (Suprapubic),skin_not_sun_exposed__suprapubic,SKINNS
+Skin - Sun Exposed (Lower leg),skin_sun_exposed__lower_leg,SKINS
+Vagina,vagina,VAGINA
+Esophagus - Mucosa,esophagus_mucosa,ESPMCS
+Adrenal Gland,adrenal_gland,ADRNLG
+Lung,lung,LUNG
+Stomach,stomach,STMACH
+Small Intestine - Terminal Ileum,small_intestine_terminal_ileum,SIILE
+Colon - Transverse,colon_transverse,CLNTRN
+Ovary,ovary,OVARY
+Muscle - Skeletal,muscle_skeletal,MSCLSK
+Heart - Atrial Appendage,heart_atrial_appendage,HRTAA
+Heart - Left Ventricle,heart_left_ventricle,HRTLV
+Prostate,prostate,PRSTTE
+Thyroid,thyroid,THYROID
+Artery - Tibial,artery_tibial,ARTTBL
+Artery - Coronary,artery_coronary,ARTCRN
+Artery - Aorta,artery_aorta,ARTAORT
+Nerve - Tibial,nerve_tibial,NERVET
+Adipose - Visceral (Omentum),adipose_visceral__omentum,ADPVSC
+Adipose - Subcutaneous,adipose_subcutaneous,ADPSBQ
+Breast - Mammary Tissue,breast_mammary_tissue,BREAST
+Cervix - Ectocervix,cervix_ectocervix,CRVECT
+Cervix - Endocervix,cervix_endocervix,CRVEND
+Uterus,uterus,UTERUS
+Fallopian Tube,fallopian_tube,FLLPNT
+Bladder,bladder,BLADDER
+Colon - Sigmoid,colon_sigmoid,CLNSGM
+Esophagus - Muscularis,esophagus_muscularis,ESPMSL
+Esophagus - Gastroesophageal Junction,esophagus_gastroesophageal_junction,ESPGEJ
+Pancreas,pancreas,PNCREAS
+Kidney - Cortex,kidney_cortex,KDNCTX
+Kidney - Medulla,kidney_medulla,KDNMED
