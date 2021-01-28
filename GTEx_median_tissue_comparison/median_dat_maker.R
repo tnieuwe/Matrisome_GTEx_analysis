@@ -18,3 +18,4 @@ for (tiss in tiss_list) {
   
   i <- i + 1
 }
+save(median_dat, gtab, file = "median_gtex_v8.rda")
