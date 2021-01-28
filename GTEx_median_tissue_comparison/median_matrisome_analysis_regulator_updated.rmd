@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(pheatmap)
-
+library(gridExtra)
 load("median_gtex_v8.rda")
 
 #Select v8 or v7
@@ -417,4 +417,80 @@ write.csv(matrisome_ord_translator, "output/matrisome_clustered_tiss_names.csv",
 
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r, width = 6, height = 10}
+hist(as.matrix(median_dat_core_n_reg))
+
+gene_plots <- as.data.frame(t(median_dat_core_n_reg)) %>% rownames_to_column(var = "tissue")
+
+ggplot(gene_plots, aes(y = tissue, x = PRSS1)) +
+  geom_col()
+
+ggplot(gene_plots, aes_string(y = "tissue", x = "PRSS1")) +
+  geom_col(fill = "white", color = "black") +
+  theme_classic()
+
+
+pdf(file="output/all_genes_all_tiss.pdf")  
+plot_out <- list()
+
+for (i in seq((ncol(gene_plots)))[-1]){   
+  temp_gene <- colnames(gene_plots)[i]
+   temp_plot <- ggplot(gene_plots, aes_string(y = "tissue", x = temp_gene)) +
+        geom_col() +
+        theme_classic()
+   
+  plot_out[[temp_gene]] <- temp_plot
+  print(temp_plot)
+} 
+
+dev.off()
+
+# ggsave(
+#    filename = "all_genes_all_tiss.pdf", 
+#    plot = marrangeGrob(plot_out, nrow=1, ncol=1), 
+#    width = 15, height = 9
+# )
+```
+Redo above with collapse brain and perhaps clustering order
+```{r}
+## Subset out the collapsed brain genes
+ind <- rownames(cllpse_brain_dat) %in% core_n_reg_tab$Gene.Symbol
+
+cllpse_brain_regcor <- cllpse_brain_dat[ind,]
+
+gene_plots_brain <- as.data.frame(t(cllpse_brain_regcor)) %>% rownames_to_column(var = "tissue")
+
+ggplot(gene_plots_brain, aes_string(y = "tissue", x = "PRSS1")) +
+  geom_col(fill = "white", color = "black") +
+  theme_classic()
+
+
+pdf(file="output/all_genes_col_brain.pdf")  
+plot_out <- list()
+
+for (i in seq((ncol(gene_plots_brain)))[-1]){   
+  temp_gene <- colnames(gene_plots_brain)[i]
+   temp_plot <- ggplot(gene_plots_brain, aes_string(y = "tissue", x = temp_gene)) +
+         geom_col(fill = "white", color = "black")  +
+        theme_classic()
+   
+  plot_out[[temp_gene]] <- temp_plot
+  print(temp_plot)
+} 
+
+dev.off()
+
+```
+Pheatmap
+
+```{r}
+
+
+ind <- apply(cllpse_brain_regcor, 1, var) > 4
+cllpse_brain_dat_var <- cllpse_brain_dat[ind,]
+
+pdf(file="output/tiss_vs_gene_heatmap.pdf", height = 20)  
+pheatmap(cllpse_brain_dat_var,fontsize_row = 3)
+dev.off()
+```
+
