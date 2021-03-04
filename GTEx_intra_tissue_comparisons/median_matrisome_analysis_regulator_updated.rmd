@@ -10,15 +10,15 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(pheatmap)
 
-load("median_gtex_v8.rda")
+load("input/median_gtex_v8.rda")
 
 #Select v8 or v7
 #median_tpm <- read.csv("median_tpm_v7.csv", stringsAsFactors = F)
-median_tpm <- read.csv("median_tpm_v8.csv", stringsAsFactors = F)
+median_tpm <- read.csv("input/median_tpm_v8.csv", stringsAsFactors = F)
 
 
 ## Read in matrisome data
-matrisome_tab <- read.csv("matrisome_hs_masterlist_EDIT_r.csv", stringsAsFactors = F)
+matrisome_tab <- read.csv("input/matrisome_hs_masterlist_EDIT_r.csv", stringsAsFactors = F)
 colnames(matrisome_tab)[1] <- "Division"
 
 matrisome_tab <- matrisome_tab %>% filter(Division != "Retired")
@@ -89,7 +89,7 @@ core_cor <- cor(median_dat_core, method = "kendall")
 pheatmap(core_cor,
                 
                 main="Core Matrisome", fontsize=5, fontsize_row=5, fontsize_col=5,
-                filename="core_matrisome_correlation_v8.pdf",
+                filename="output/core_matrisome_correlation_v8.pdf",
                 width=7, height=7)
 
 #New core
@@ -220,7 +220,7 @@ ggplot(percent_dat) +
   coord_flip(ylim=c(0,.125)) 
 
 
-ggsave(filename = "percent_transcriptome_matrisome_v8.pdf", width = 10, height = 10)
+ggsave(filename = "output/percent_transcriptome_matrisome_v8.pdf", width = 10, height = 10)
 
 ```
 
