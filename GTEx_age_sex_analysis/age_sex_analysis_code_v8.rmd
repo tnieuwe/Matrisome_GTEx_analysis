@@ -1,0 +1,1206 @@
+---
+title: "age_sex_analysis.RMD"
+author: "Tim Nieuwenhuis"
+date: "11/1/2019"
+output: html_document
+---
+
+To do:
+Make sex samples also work with the read in code
+Fix the p-values situation as every single test is a hypothesis
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RColorBrewer)
+library(ggpubr)
+library(DESeq2)
+source("../../../NieuweR/tim_scripts.R")
+```
+
+Remove retired
+```{r}
+
+mat_tab <- read.csv("../global_in/matrisome_hs_masterlist_EDIT_r.csv", stringsAsFactors = F)
+colnames(mat_tab)[1] <- "Division"
+retired_mat <- filter(mat_tab, Division != "Retired")
+
+mat_tab_core <- mat_tab %>% filter(Division == "Core matrisome" | Category == "ECM Regulators")
+
+join_ready_mat_core <- mat_tab_core %>% select(Division, Category, gene_name = Gene.Symbol)
+mat_tab_cat <- mat_tab %>% select(Gene.Symbol, Category)
+```
+
+
+
+Read in ordering of tissues/dictionary
+```{r}
+clust_order <- read.csv("input/ordered_all_tiss_mat_names.csv")
+```
+
+
+
+Linear model age
+```{r load in data}
+
+tiss_list <- as.vector(read.table(file = "input/general_list_test_clean.txt", header = F, stringsAsFactors = F)[,1])
+
+
+master_lm <- NULL
+
+fail_list <- NULL
+
+
+for (tiss in tiss_list) {
+  file_name <- paste0("input/","limma_result_files",
+                      "/limma_",tiss,"_res_age.csv")
+  #Try catch here to read through if file doesn't exist
+  
+    if (!(file.exists(file_name))) {
+    next
+  }
+  
+
+  current_df <- read.csv(file_name, stringsAsFactors = F)
+
+
+  ## Mutating the columns to fit old code
+  current_df$tissue <- tiss
+  current_df <- left_join(current_df,join_ready_mat_core, by = "gene_name")
+  current_df <- current_df %>% dplyr::select(Gene.Symbol = "gene_name",
+                                             pvalue = "P.Value",
+                                             pvalue_adjusted = "adj.P.Val",
+                                             estimates = "logFC",
+                                             division = "Division",
+                                             tissue)
+  
+  master_lm <- rbind(master_lm, current_df)
+  #master_lm <- list(master_lm, current_df)
+  
+}
+
+master_lm <- master_lm  %>% filter(Gene.Symbol != retired_mat$Gene.Symbol) %>% distinct()
+
+master_lm <- master_lm %>% mutate(all.correct.pval = p.adjust(pvalue, method = "holm"))
+master_lm <- filter(master_lm, !(is.na(all.correct.pval)), all.correct.pval < .05)
+
+
+
+summary(master_lm)
+
+length(unique(master_lm$Gene.Symbol))
+
+write.csv(master_lm, file = "output/table_S1_all_age_results.csv")
+```
+
+
+# Plotting LM
+## What is the best way to represent this data?
+
+Core and regualtory matrisome
+```{r}
+#Filtering down to only core proteins
+master_lm_coreg <- left_join(master_lm, mat_tab_cat) %>%
+  #Filter down to our core list
+  filter(division == "Core matrisome" | Category == "ECM Regulators") %>% 
+  #Get direction of estimaes
+  mutate(direction = ifelse(estimates > 0, "positive", "negative"),
+         #absolute value of estimates
+         estimate_abs = abs(estimates),
+         #adjusted log 10 of elements
+         log_10_pval = -log10(all.correct.pval)) %>%
+  #Descending list
+  arrange(desc(log_10_pval)) %>% 
+  filter(all.correct.pval <= 0.05)
+
+
+#Arbitrary usage of 75% quantile to determine sig cut off 
+master_lm_coreg_top <- master_lm_coreg %>%  filter(log_10_pval >= quantile(master_lm_coreg$log_10_pval)[4])
+
+#Pulls top 10 unique genes
+top_genes <- head(unique(master_lm_coreg_top$Gene.Symbol), n = 10)
+
+
+pval_lm_all <- master_lm_coreg %>% filter(Gene.Symbol %in% top_genes)
+
+ggplot(pval_lm_all, aes(x = Gene.Symbol, y = tissue)) +
+  geom_point(aes(color = direction, size = log_10_pval)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+ggsave("output/core_reg_top-pval_lm_v8_new.pdf")
+```
+
+
+
+Grouping by tissue and taking the genes with the largest change per tissue.
+```{r}
+#Replaced slice_head with slicer
+#Below we went from master_coreg_top to just master_lm_coreg, because if something passes normal multiple correction sig I don't believe it needs to go through another arbitrary level of filtering
+master_lm_coreg_top_tiss <- master_lm_coreg %>%
+                              group_by(tissue) %>%
+                              arrange(desc(estimate_abs)) %>%
+                              slice_head()
+
+#use above to make factor with levels
+master_lm_coreg_top_tiss <- master_lm_coreg_top_tiss %>%
+                              #Arrange on descending tissues and turn tissue into top tiss
+                              arrange(desc(tissue)) %>%
+                              mutate(top_tiss = tissue)
+
+top_tiss_tib <- select(master_lm_coreg_top_tiss, Gene.Symbol, top_tiss)
+
+top_genes <- (unique(master_lm_coreg_top_tiss$Gene.Symbol))
+
+plot_lm_all <- master_lm_coreg %>%
+  filter(Gene.Symbol %in% top_genes, all.correct.pval < 0.05) %>%
+  mutate(Gene.Symbol = factor(Gene.Symbol, levels = unique(master_lm_coreg_top_tiss$Gene.Symbol)))
+
+
+beta_lm_all <- left_join(plot_lm_all, top_tiss_tib)
+
+#Add ordering step
+
+#Order tissues
+beta_lm_all$tissue <- factor(beta_lm_all$tissue,
+                             levels = clust_order$r_names,
+                             ordered = T)
+order_filt <- clust_order[clust_order$r_names %in% beta_lm_all$tissue,]
+beta_lm_all$division <- factor(beta_lm_all$division, levels = unique(beta_lm_all$division), ordered = T)
+
+map <- match(beta_lm_all$tissue, clust_order$abrreviated)
+beta_lm_all$abbrev <- factor(clust_order$abrreviated[map],
+                             levels = clust_order$abrreviated)
+
+
+#Order genes
+ordered_genes <- beta_lm_all %>% select(Gene.Symbol, Category) %>% unique() %>% arrange(Category, Gene.Symbol)
+
+
+ggplot(beta_lm_all) +
+  geom_point(aes(x = Gene.Symbol, y = tissue, color = direction, size = estimate_abs)) +
+  scale_color_manual(values = c("#FFC20A", "#0C7BDC")) +
+  scale_y_discrete(limits = order_filt$r_names, labels = order_filt$abrreviated) +
+  scale_x_discrete(limits = ordered_genes$Gene.Symbol) +
+  geom_raster(aes(x = Gene.Symbol, y = -1,  fill = Category)) +
+  scale_fill_manual(values = c("#E66100", "#5D3A9B", "#E1BE6A", "#994F00")) +
+  geom_point(aes(x = Gene.Symbol, y = top_tiss), shape = 8) +
+  #geom_rect(aes(xmin = Gene.Symbol, xmax= lead(Gene.Symbol), ymin = -1, ymax =-.5, fill = division), position = ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  xlab("Matrisome Genes") +
+  ylab("GTEx Tissues") +
+  labs(color = "Estimate Direction", size = "Beta Estimate")
+
+ggsave("output/fig_2a_top_beta_age_change.pdf", width = 10, height = 7.5)
+#View(beta_lm_all %>% arrange(Gene.Symbol, top_tiss) %>% select(Gene.Symbol, top_tiss))
+
+#Corr sized exposed per tissue
+
+```
+
+
+Taking the most significant p-values
+```{r}
+####Top P-vals data
+
+
+
+master_lm_coreg_top_tiss <- master_lm_coreg %>%
+  group_by(tissue)  %>%
+  arrange(desc(log_10_pval)) %>%
+  slice_head()
+
+#use above to make factor with levels
+master_lm_coreg_top_tiss <- master_lm_coreg_top_tiss %>%
+                            arrange(desc(tissue)) %>%
+                            mutate(top_tiss = tissue)
+
+top_tiss_tib <- select(master_lm_coreg_top_tiss, Gene.Symbol, top_tiss)
+
+top_genes <- (unique(master_lm_coreg_top_tiss$Gene.Symbol))
+
+plot_lm_all <- master_lm_coreg %>%
+                filter(Gene.Symbol %in% top_genes, all.correct.pval < 0.05) %>%
+                mutate(Gene.Symbol = factor(Gene.Symbol, levels = unique(master_lm_coreg_top_tiss$Gene.Symbol)))
+
+
+beta_lm_all <- left_join(plot_lm_all, top_tiss_tib)
+
+#Add ordering step
+
+#Order tissues
+beta_lm_all$tissue <- factor(beta_lm_all$tissue, levels = rev(clust_order$r_names), ordered = T)
+order_filt <- clust_order[clust_order$r_names %in% beta_lm_all$tissue,]
+beta_lm_all$division <- factor(beta_lm_all$division, levels = unique(beta_lm_all$division), ordered = T)
+
+#Order genes
+ordered_genes <- beta_lm_all %>% select(Gene.Symbol, Category) %>% unique() %>% arrange(Category, Gene.Symbol)
+
+
+
+ggplot(beta_lm_all) +
+  geom_point(aes(x = Gene.Symbol, y = tissue, color = direction, size = estimate_abs)) +
+  scale_color_manual(values = c("#FFC20A", "#0C7BDC")) +
+  scale_y_discrete(limits = order_filt$r_names, labels = order_filt$abrreviated) +
+  scale_x_discrete(limits = ordered_genes$Gene.Symbol) +
+  geom_raster(aes(x = Gene.Symbol, y = -1,  fill = Category)) +
+  scale_fill_manual(values = c("#E66100", "#5D3A9B", "#E1BE6A", "#994F00")) +
+  geom_point(aes(x = Gene.Symbol, y = top_tiss), shape = 8) +
+  theme_minimal(base_size = 13) + theme(axis.text.x = element_text(angle = 90)) +
+  ylab("Tissues") + xlab("Genes") + labs(fill = "Matrisome Division", color = "Direction", size = "Estimated Beta")
+
+ggsave("output/fig_2a_small_pval_age_change.pdf.pdf", width = 10, height = 7.5)
+
+
+
+master_lm_coreg_top_tiss %>% filter(Gene.Symbol == "ADIPOQ") %>%
+    arrange(estimate_abs)
+
+```
+
+
+
+Comparing data to this paper https://pubmed.ncbi.nlm.nih.gov/25954002/. The data is a list of differentially expressed genes based on age using lme4's linear mixed models. Of importance they treaTED SUBJID and tissue as random effects and so none of these genes are tissue specific, but rather global. I'm interested in seeing how many of these genes are found in my tissue specific lists. 
+
+Read in the data
+```{r}
+tiss_agn_dat <- read.csv("input/pmid_25954002_age_genes.csv")
+#Select columns of interest
+tiss_agn_dat <- tiss_agn_dat %>% select(gene_id, gene_name, GeneGroup, raw.pval, corrected.pval, regression.coefficient)
+
+head(tiss_agn_dat)
+```
+
+
+Those included and those not included are not significantly different based on their absolute value of coefficients
+
+Test if it appears in our data
+```{r}
+## Filter to our sig genes
+share_agn_dat <- tiss_agn_dat %>% filter(gene_name %in% master_lm$Gene.Symbol)
+## FIlter to just matrisome genes
+mele_matrisome <- tiss_agn_dat %>% filter(gene_name %in% mat_tab_core$Gene.Symbol)
+
+
+## Subset our own datat to eventually join theres
+sub_master_lm  <- master_lm %>% dplyr::rename(gene_name = Gene.Symbol) %>%
+  filter(gene_name %in% share_agn_dat$gene_name) %>%
+  mutate(pos_neg = ifelse(estimates > 0, "positive", "negative"))
+
+## Check genes for global directionality
+dir_table <- table(sub_master_lm$gene_name, sub_master_lm$pos_neg)
+dir_table
+shared_globa_dir <- dir_table[,1] == 0 | dir_table[,1] == 0
+sum(shared_globa_dir)/length(shared_globa_dir)
+
+#unique genes cross over
+length(unique(sub_master_lm$gene_name))
+
+
+joined_agn_dat <- left_join(sub_master_lm, share_agn_dat)
+
+#Test if values generally go the same direction
+joined_agn_dat <- joined_agn_dat %>%
+  mutate(direction_agree = case_when(
+    #If our estimate is greater than the coefficient or less than
+    (estimates > 0 & regression.coefficient > 0) |
+      (estimates < 0 & regression.coefficient < 0) ~ 1,
+    TRUE ~ 0
+  )
+)
+
+table(joined_agn_dat$direction_agree)/nrow(joined_agn_dat)
+
+
+dont_agree <- joined_agn_dat %>% filter(direction_agree == 0)
+do_agree <- joined_agn_dat %>% filter(direction_agree == 1)
+
+unique(dont_agree$gene_name) %in% unique(do_agree$gene_name)
+#All of them agree at least in one tissue
+```
+
+Do we have overall genes increasing with age or decreasing?
+```{r}
+table(master_lm_coreg$direction)
+
+
+upreg_n_dreg <- as.data.frame.matrix(table(master_lm_coreg$Gene.Symbol, master_lm_coreg$direction)) %>%
+                  rownames_to_column("genes")
+
+upreg_only <- upreg_n_dreg[upreg_n_dreg$negative == 0,]
+
+upreg_only %>% arrange(desc(positive))
+
+dreg_only <- upreg_n_dreg[upreg_n_dreg$positive == 0,]
+
+dreg_only %>% arrange(desc(negative))
+
+
+upreg_n_dreg %>% mutate(pos_o_neg = positive/negative) %>% arrange(desc(pos_o_neg)) 
+```
+Collagens and arterys
+```{r}
+artery_dat <- master_lm %>% filter(startsWith(tissue,"artery")) %>%
+                            arrange(Gene.Symbol)
+#Total collagens
+artery_col <- artery_dat %>% filter(startsWith(Gene.Symbol, "COL"))
+unique(artery_col$Gene.Symbol)
+
+dup_genes <- artery_col$Gene.Symbol[duplicated(artery_col$Gene.Symbol)]
+
+artery_dat[artery_col$Gene.Symbol %in% dup_genes,]
+
+
+sum(artery_col$estimates[!(artery_col$Gene.Symbol %in% dup_genes)] < 0)
+
+#Change in Elastin is driven by  degradation driven by MMP. MT1-MMP and MMP2. MMP2 is found near 
+#fragmented elastin fibers in the Aorta
+artery_mmp <- artery_dat %>% filter(startsWith(Gene.Symbol, "MMP"))
+```
+
+
+Transverese colon age and adipoq
+
+Get genetic data
+```{r Options}
+genes = c("ADIPOQ")
+tissue_list = c("colon_transverse")
+compare_columns = c("BMI", "AGE")
+```
+
+Load in gene data, then phenotype data
+```{r}
+
+#Empty data frame
+gene_frame <- data.frame()
+
+#Load in tissues
+tissue = tissue_list[42]
+for (tissue in tissue_list) {
+  load(paste0("~/Halushka Lab/GTEx_variation/variation_tools/gtex_variation_toolbox/input_data/rda_output/",tissue,"-vsd-mean-filtered.rda"))
+  
+  gene_dat <- assay(get(paste0(tissue,"VSDMeanFiltered")))     
+  
+  ind <- gtabMeanFiltered$gene_name %in% genes
+  sub_gtab <- gtabMeanFiltered[ind,,drop = F]
+  sub_dat <- gene_dat[ind,,drop = F]   
+  rownames(sub_dat) <- sub_gtab$gene_name
+  t_dat <- as.data.frame(t(sub_dat))
+  t_dat$tissue <- tissue
+  
+  gene_frame <- rbind(t_dat, gene_frame)
+}
+
+gene_frame <- rownames_to_column(gene_frame, var = "SAMPID")
+
+gene_frame$SUBJID <- shorter_gtex_names_vect(gene_frame)
+
+#Load in subj data
+library(data.table)
+subject_dat  <- as.data.frame(
+  fread('~/Halushka Lab/GTEx_variation/variation_tools/gtex_variation_toolbox/input_data/GTEx_Analysis_2017-06-05_v8_Annotations_SubjectPhenotypesDS.txt'))
+
+
+subject_dat <- select(subject_dat, SUBJID, compare_columns, SEX)
+
+final_frame <- left_join(gene_frame, subject_dat)
+
+final_frame <- final_frame %>%
+  mutate(SUBJID = str_remove(string = SUBJID, "GTEX-")) %>% select(SUBJID, ADIPOQ, BMI, AGE, SEX) 
+
+ggplot(subject_dat, aes(x = AGE)) +
+  geom_bar() +
+  theme_classic() +
+  labs(x = "Age")
+```
+
+
+Using imageJ we analyzed samples of transverse colon to see if there were changes
+```{r}
+library(lme4)
+library(lmerTest)
+library(ggtext)
+transverse_dat <- read.csv("input/tissue_imgs/transverse_colon/transverse_results.csv")
+transverse_dat <- left_join(transverse_dat, final_frame)
+transverse_dat$SEX <- as.factor(transverse_dat$SEX)
+
+#All samples
+## Boxplot
+ggplot(transverse_dat, aes(x = percent, fill = top_o_bot)) +
+  geom_histogram(position = "identity", alpha = 0.7, color = "black")
+
+ggplot(transverse_dat, aes(y = percent, x = top_o_bot, fill = top_o_bot)) +
+  #geom_pointrange() +
+  geom_boxplot() +
+  geom_jitter(width = .3) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(title = "Transverse Colon Submucosa White Space Percentage, all slices",
+       subtitle = paste("N = ", nrow(transverse_dat), "slices", "N =",
+                        length(unique(transverse_dat$SUBJID)), "individuals")) +
+  xlab("Top or Bottom levels of Global *ADIPOQ* Expression") +
+  ylab("Percentage White Space") +
+  scale_x_discrete(labels= c("Bottom Samples", "Top Samples")) +
+  theme_classic() +
+  theme(axis.title.x = ggtext::element_markdown(),
+        legend.position = "none")
+ggsave("output/all_sample_transverse_plot.pdf", width = 6, height = 6)
+
+
+## Scatter
+ggplot(transverse_dat, aes(y = percent, x = ADIPOQ, shape = SEX, color = top_o_bot)) +
+  geom_point() +
+  scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(title = "Transverse Colon Submucosa White Space Percentage, all slices",
+       subtitle = paste("N = ", nrow(transverse_dat), "slices", "N =",
+                        length(unique(transverse_dat$SUBJID)), "individuals")) +
+  xlab("Normalized *ADIPOQ* Expression") +
+  ylab("Percentage White Space") +
+  labs(color = "Top or Bottom Global ADIPOQ") +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  theme(axis.title.x = ggtext::element_markdown()) 
+ggsave("output/adipoq_transverse_all_Samp.pdf", width = 6, height = 6)
+
+
+## Boxplot?
+ggplot(transverse_dat, aes(y = percent, x = ADIPOQ, color = top_o_bot)) +
+  geom_boxplot() +
+  scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(title = "Transverse Colon Submucosa White Space Percentage, all slices",
+       subtitle = paste("N = ", nrow(transverse_dat), "slices", "N =",
+                        length(unique(transverse_dat$SUBJID)), "individuals")) +
+  xlab("Normalized *ADIPOQ* Expression") +
+  ylab("Percentage White Space") +
+  labs(color = "Top or Bottom Global ADIPOQ") +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  theme(axis.title.x = ggtext::element_markdown()) 
+ggsave("output/adipoq_transverse_all_Samp.pdf", width = 6, height = 6)
+
+
+#Get median
+transverse_median <- transverse_dat %>% group_by(SUBJID) %>%
+  summarise(median_percent = median(percent), top_o_bot, med_adipoq = median(ADIPOQ)) %>%
+  unique()
+
+ggplot(transverse_median, aes(x = median_percent, fill = top_o_bot)) +
+  geom_histogram(position = "identity", alpha = 0.7, color = "black")
+
+
+ggplot(transverse_median, aes(y = median_percent, x = top_o_bot, fill = top_o_bot)) +
+  geom_boxplot() +
+  geom_jitter(width = .3) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(title = paste("Transverse Colon Submucosa White Space Percentage,
+median per individual"),
+       subtitle = paste("N = ", nrow(transverse_dat), "slices", "N =",
+                        length(unique(transverse_dat$SUBJID)), "individuals")) +
+  xlab("Top or Bottom levels of Global *ADIPOQ* Expression") +
+  ylab("Percentage White Space") +
+  scale_x_discrete(labels= c("Bottom Samples", "Top Samples")) +
+  theme_classic() +
+  theme(axis.title.x = ggtext::element_markdown(),
+        legend.position = "none") 
+
+
+ggsave("output/median_transverse_plot.pdf", width = 6, height = 6)
+
+## Scatter
+ggplot(transverse_median, aes(y = median_percent, x = med_adipoq, color = top_o_bot)) +
+  geom_point() +
+  scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(title = paste("Transverse Colon Submucosa White Space Percentage,
+median per individual"),
+       subtitle = paste("N = ", nrow(transverse_dat), "slices", "N =",
+                        length(unique(transverse_dat$SUBJID)), "individuals")) +
+  xlab("Normalized *ADIPOQ* Expression") +
+  ylab("Percentage White Space") +
+  labs(color = "Top or Bottom Global ADIPOQ") +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  theme(axis.title.x = ggtext::element_markdown()) 
+
+ggsave("output/adipoq_transverse_med_Samp.pdf", width = 6, height = 6)
+
+library(broom.mixed)
+transverse_lm  <-  lmer(percent ~ ADIPOQ + AGE + SEX+ BMI  + (1|SUBJID),
+                         REML = F,
+                         data = transverse_dat)
+
+transverse_lm_2  <-  lmer(percent ~ ADIPOQ + AGE * SEX + BMI  + (1|SUBJID),
+                         REML = F,
+                         data = transverse_dat)
+
+
+
+
+summary(transverse_lm)
+summary(transverse_lm)$coefficients
+conf_transvere <- confint(transverse_lm)
+pval <- format.pval(summary(transverse_lm)$coefficients[,5], digits = 2, eps = FALSE)
+
+tidy_tran_lm <- tidy(transverse_lm)
+write.csv(tidy_tran_lm, "output/suppl_table_trancol_percent_fun_age_adipo.csv")
+### Add age and ADIPOQ
+load("input/adipose_subcutaneous-vsd-unfiltered.rda")
+
+sub_dat <- assay(adipose_subcutaneousVSD)
+ind <- gtab$gene_name %in% mat_tab$Gene.Symbol 
+sub_dat <- sub_dat[ind,]
+sub_gtab <- gtab[ind,]
+
+
+
+```
+Point Range the figure for paper
+```{r}
+ggplot(transverse_dat, aes(y = percent, x = ADIPOQ, color = top_o_bot)) +
+  geom_point() +
+  geom_crossbar(data = transverse_median, aes(y = median_percent,
+                                              x = med_adipoq,
+                                              ymin = median_percent,
+                                              ymax = median_percent,
+                                              xmin = 0,
+                                              xmax = 0
+                                              ),
+                color = "black",
+                width = .5) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(title = "Transverse Colon Submucosa White Space Percentage, all slices",
+       subtitle = paste("N = ", nrow(transverse_dat), "slices", "N =",
+                        length(unique(transverse_dat$SUBJID)), "individuals")) +
+  xlab("Normalized *ADIPOQ* Expression") +
+  ylab("Percentage White Space") +
+  labs(color = "Top or Bottom Global ADIPOQ") +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  theme(axis.title.x = ggtext::element_markdown()) 
+ggsave("output/adipoq_transverse_median_bar.pdf", width = 6, height = 6)
+
+
+```
+
+
+
+# Starting Sex Analysis
+
+```{r load in data}
+tiss_list <- as.vector(read.table(file = "input/general_list_test_clean.txt", header = F, stringsAsFactors = F)[,1])
+
+
+master_lm_sex <- NULL
+
+fail_list <- NULL
+
+
+for (tiss in tiss_list) {
+  file_name <- paste0("input/limma_result_files/limma_",tiss,"_res_sex.csv")
+  #Try catch here to read through if file doesn't exist
+  
+    if (!(file.exists(file_name))) {
+    next
+  }
+  
+
+  current_df <- read.csv(file_name, stringsAsFactors = F)
+
+
+  
+  current_df$tissue <- tiss
+  current_df <- left_join(current_df,join_ready_mat_core, by = "gene_name")
+  current_df <- current_df %>% dplyr::select(Gene.Symbol = "gene_name",
+                                             pvalue = "P.Value",
+                                             pvalue_adjusted = "adj.P.Val",
+                                             estimates = "logFC",
+                                             division = "Division",
+                                             tissue)
+  master_lm_sex <- rbind(master_lm_sex, current_df)
+  #master_lm_sex <- list(master_lm_sex, current_df)
+  
+}
+
+master_lm_sex <- master_lm_sex  %>% filter(Gene.Symbol != retired_mat$Gene.Symbol) %>% distinct()
+
+master_lm_sex <- master_lm_sex %>% mutate(all.correct.pval = p.adjust(pvalue, method = "holm"),
+                                          direction = ifelse(estimates > 0, "Females", "Males"),
+                                          estimate_abs = abs(estimates))
+master_lm_sex <- filter(master_lm_sex, !(is.na(all.correct.pval)), all.correct.pval < .05)
+
+master_lm_sex <- left_join(master_lm_sex, mat_tab_cat)
+
+
+summary(master_lm_sex)
+
+length(unique(master_lm_sex$Gene.Symbol))
+
+write.csv(master_lm_sex, file = "output/table_S3_all_asex_results.csv")
+```
+
+Plot histogram of genes per tissue for sig age findings
+
+
+```{r}
+library(EnvStats)
+library(reshape2)
+
+hist_df <- master_lm %>% mutate(direction = ifelse(estimates > 0, "positive", "negative"))
+
+sum_4_hist <- left_join(dplyr::rename(hist_df, r_names = tissue),
+                     clust_order) %>%
+  group_by(abrreviated) %>%
+  summarise(total_n = n())
+
+
+hist_df <-   left_join(dplyr::rename(hist_df, r_names = tissue),
+                     clust_order) %>%
+  group_by(abrreviated, direction) %>%
+  summarise(n = n())
+
+supp_table_gene_age <-  dcast(hist_df, abrreviated ~ direction, value.var = "n") %>%
+                        dplyr::rename(Tissue = "abrreviated",
+                               `N of genes that decrease with age` = 'negative',
+                               `N of genes that increase with age` = "positive")
+
+write.csv(supp_table_gene_age, "output/suppl_table_aging_genes_incr_decr.csv")
+
+hist_df <- left_join(hist_df, sum_4_hist)
+
+
+ggplot(hist_df, aes(x = reorder(abrreviated, total_n), y = n, fill = direction)) +
+  geom_bar(stat = "identity", color = "black")  +
+  theme_classic() +
+ # geom_text(aes(label=n)) +
+  #theme(axis.text.x = element_text(angle = 90)) +
+  scale_fill_manual(values = c("#FFC20A", "#0C7BDC")) +
+  coord_flip() +
+  xlab("Tissue Abrreviation") +
+  ylab("Count of Sig Genes") +
+  labs(title = "Barplot of genes that change over age")
+ggsave("output/fig_S3_age_DE_genes_tiss.pdf", width = 7, height = 8)
+
+```
+
+```{r}
+
+hist_sex <- master_lm_sex
+
+sum_4_sex <- left_join(dplyr::rename(hist_sex, r_names = tissue),
+                     clust_order) %>%
+  group_by(abrreviated) %>%
+  summarise(total_n = n())
+
+
+hist_sex <-   left_join(dplyr::rename(hist_sex, r_names = tissue),
+                     clust_order) %>%
+  group_by(abrreviated, direction) %>%
+  summarise(n = n())
+
+hist_sex <- left_join(hist_sex, sum_4_sex)
+
+
+ggplot(hist_sex, aes(x = reorder(abrreviated, total_n), y = n, fill = direction)) +
+  geom_bar(stat = "identity", color = "black")  +
+  theme_classic() +
+ # geom_text(aes(label=n)) +
+  #theme(axis.text.x = element_text(angle = 90)) +
+  scale_fill_manual(values = c("#0C7BDC", "#FFC20A")) +
+  coord_flip() +
+  xlab("Tissue Abrreviation") +
+  ylab("Count of Sig Genes") +
+  labs(title = "Histogram of genes that associate with sex")
+
+ggsave("output/fig_S4_sex_DE_genes_tiss.pdf", width = 7, height = 8)
+
+```
+
+
+
+
+Plot the top DE genes in sex
+```{r}
+
+
+#Get top genes per each tissue
+master_sex_top_tiss <- master_lm_sex %>%
+                              group_by(tissue) %>%
+                              arrange(desc(estimate_abs)) %>%
+                              slice_head()
+
+#use above to make factor with levels
+master_sex_top_tiss <- master_sex_top_tiss %>%
+                              #Arrange on descending tissues and turn tissue into top tiss
+                              arrange(desc(tissue)) %>%
+                              #Add top tissue data for later in the graph
+                              mutate(top_tiss = tissue)
+#Select out important info for the left_join
+top_tiss_tib <- select(master_sex_top_tiss, Gene.Symbol, top_tiss, Category)
+#Get all top genees
+top_genes <- (unique(master_sex_top_tiss$Gene.Symbol))
+
+#Start preparing non-top data for the left_join
+plot_lm_all <- master_lm_sex %>%
+  #Only sig genes
+  filter(Gene.Symbol %in% top_genes, all.correct.pval < 0.05) %>%
+  #Add order to gene symbols now?
+  mutate(Gene.Symbol = factor(Gene.Symbol, levels = unique(master_sex_top_tiss$Gene.Symbol)))
+
+
+beta_lm_all <- left_join(plot_lm_all, top_tiss_tib)
+
+#Add ordering step
+
+#Order genes
+ordered_genes <- top_tiss_tib %>% select(Gene.Symbol, Category, tissue) %>% unique() %>% arrange(Category, Gene.Symbol)
+
+
+#Order tissues on tissue clustering
+beta_lm_all$tissue <- factor(beta_lm_all$tissue, levels = rev(clust_order$r_names), ordered = T)
+order_filt <- clust_order[clust_order$r_names %in% beta_lm_all$tissue,]
+beta_lm_all$division <- factor(beta_lm_all$division, levels = unique(beta_lm_all$division), ordered = T)
+
+
+#Ordering tissues on gene order per Marc's suggestions
+
+ordered_genes$abbreviated <- clust_order$abrreviated[match(ordered_genes$tissue, clust_order$r_names)]
+ordered_genes$r_names <- ordered_genes$tissue
+
+
+
+#beta_lm_all$tissue <- factor(beta_lm_all$tissue, levels = rev(ordered_genes$tissue), ordered = T)
+
+
+sex_b_size_plot <- ggplot(beta_lm_all) +
+  geom_point(aes(x = Gene.Symbol, y = tissue, color = direction, size = estimate_abs)) +
+  scale_color_manual(values = c("#0C7BDC", "#FFC20A")) +
+  scale_y_discrete(limits = rev(ordered_genes$r_names), labels = rev(ordered_genes$abbreviated)) +
+  scale_x_discrete(limits = unique(ordered_genes$Gene.Symbol)) +
+  geom_tile(aes(x = Gene.Symbol, y = -1,  fill = Category)) +
+  scale_fill_manual(values = c(
+   # "#E66100",
+    "#5D3A9B", "#E1BE6A", "#994F00")) +
+  geom_point(aes(x = Gene.Symbol, y = top_tiss), shape = 8) +
+  #geom_rect(aes(xmin = Gene.Symbol, xmax= lead(Gene.Symbol), ymin = -1, ymax =-.5, fill = division), position = ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  xlab("Matrisome Genes") +
+  ylab("GTEx Tissues") +
+  scale_size_continuous(range = c(2,8)) +
+  labs(color = "Higher in", size = "Beta Estimate")
+
+sex_b_size_plot
+ggsave("output/fig_4a_unused_all_sex_beta.pdf", width = 7,
+      height = 7)
+```
+
+
+Redo plot above for p-value results
+```{r}
+
+
+#Get top genes per each tissue
+master_sex_top_tiss <- master_lm_sex %>%
+                              group_by(tissue) %>%
+                              arrange((all.correct.pval)) %>%
+                              slice_head()
+
+#use above to make factor with levels
+master_sex_top_tiss <- master_sex_top_tiss %>%
+                              #Arrange on descending tissues and turn tissue into top tiss
+                              arrange(desc(tissue)) %>%
+                              #Add top tissue data for later in the graph
+                              mutate(top_tiss = tissue)
+#Select out important info for the left_join
+top_tiss_tib <- select(master_sex_top_tiss, Gene.Symbol, top_tiss, Category)
+#Get all top genees
+top_genes <- (unique(master_sex_top_tiss$Gene.Symbol))
+
+#Start preparing non-top data for the left_join
+plot_lm_all <- master_lm_sex %>%
+  #Only sig genes
+  filter(Gene.Symbol %in% top_genes, all.correct.pval < 0.05) %>%
+  #Add order to gene symbols now?
+  mutate(Gene.Symbol = factor(Gene.Symbol, levels = unique(master_sex_top_tiss$Gene.Symbol)))
+
+
+beta_lm_all <- left_join(plot_lm_all, top_tiss_tib)
+
+#Add ordering step
+
+#Order genes
+ordered_genes <- top_tiss_tib %>% select(Gene.Symbol, Category, tissue) %>% unique() %>% arrange(Category, Gene.Symbol)
+
+
+#Order tissues on tissue clustering
+beta_lm_all$tissue <- factor(beta_lm_all$tissue, levels = rev(clust_order$r_names), ordered = T)
+order_filt <- clust_order[clust_order$r_names %in% beta_lm_all$tissue,]
+beta_lm_all$division <- factor(beta_lm_all$division, levels = unique(beta_lm_all$division), ordered = T)
+
+
+#Ordering tissues on gene order per Marc's suggestions
+
+ordered_genes$abbreviated <- clust_order$abrreviated[match(ordered_genes$tissue, clust_order$r_names)]
+ordered_genes$r_names <- ordered_genes$tissue
+
+
+
+#beta_lm_all$tissue <- factor(beta_lm_all$tissue, levels = rev(ordered_genes$tissue), ordered = T)
+
+
+sex_p_size_plot <- ggplot(beta_lm_all) +
+  geom_point(aes(x = Gene.Symbol, y = tissue, color = direction, size = estimate_abs)) +
+  scale_color_manual(values = c("#0C7BDC", "#FFC20A")) +
+  scale_y_discrete(limits = rev(ordered_genes$r_names), labels = rev(ordered_genes$abbreviated)) +
+  scale_x_discrete(limits = unique(ordered_genes$Gene.Symbol)) +
+  geom_tile(aes(x = Gene.Symbol, y = -1,  fill = Category)) +
+  scale_fill_manual(values = c(
+    "#E66100",
+    "#5D3A9B", "#E1BE6A", "#994F00")) +
+  geom_point(aes(x = Gene.Symbol, y = top_tiss), shape = 8) +
+  #geom_rect(aes(xmin = Gene.Symbol, xmax= lead(Gene.Symbol), ymin = -1, ymax =-.5, fill = division), position = ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  xlab("Matrisome Genes") +
+  ylab("GTEx Tissues") +
+  scale_size_continuous(range = c(2,8)) +
+  labs(color = "Higher in", size = "Beta Estimate")
+
+sex_b_size_plot
+ggsave("output/fig_4a_all_sex_pvalue.pdf", width = 7,
+      height = 7)
+```
+
+Make scale corrector
+```{r}
+top_gene_r <- beta_lm_all %>% arrange(desc(estimate_abs)) %>% slice_max(estimate_abs)
+top_gene_skin <- top_gene_r %>%
+  mutate(Gene.Symbol = "a_place_hold", 
+         tissue = "skin_not_sun_exposed__suprapubic",
+         Category = "Collagens") %>%
+  select(-top_tiss)
+top_gene_fat <- top_gene_r %>%
+  mutate(Gene.Symbol = "a_place_hold", 
+         tissue = "adipose_subcutaneous",
+         Category = "Collagens") %>%
+  select(-top_tiss)
+
+```
+
+
+Generate Skin Plot
+
+```{r fig.height= 10, fig.width= 5}
+skin_sex <- master_lm_sex %>% filter(startsWith(tissue, "skin"))
+skin_sex<- rbind(skin_sex,top_gene_skin)
+#Order genes
+ordered_genes <- skin_sex %>% select(Gene.Symbol, Category) %>% unique() %>% arrange(Category, Gene.Symbol)
+
+
+skin_plot <- ggplot(skin_sex) +
+  geom_point(aes(x = tissue, y = Gene.Symbol, color = direction, size = estimate_abs)) +
+  scale_color_manual(values = c("#0C7BDC", "#FFC20A")) +
+  scale_y_discrete(limits = unique(ordered_genes$Gene.Symbol)) +
+  scale_x_discrete(labels = c("No Sun", "Sun Exposed")) +
+  geom_tile(aes(x = -1, y = Gene.Symbol,  fill = Category)) +
+  scale_fill_manual(values = c("#E66100", "#5D3A9B", "#E1BE6A", "#994F00")) +
+  #geom_rect(aes(xmin = Gene.Symbol, xmax= lead(Gene.Symbol), ymin = -1, ymax =-.5, fill = division), position = ) +
+  theme_minimal() +
+#  theme(axis.text.x = element_text(angle = 90)) +
+  xlab("Skin Types") +
+  ylab("Matrisome Genes") +
+  scale_size_continuous(range = c(2,8)) +
+  labs(color = "Estimate Sex Association", size = "Beta Estimate")
+skin_plot
+
+ggsave("output/skin_sex_difference.pdf", width = 7, height = 7.5)
+
+
+sum(table(skin_sex$Gene.Symbol) == 2)
+length(unique(skin_sex$Gene.Symbol))
+```
+Adipose and skin combined
+
+```{r}
+flesh_sex <- master_lm_sex %>%
+  filter(startsWith(tissue, "skin") | startsWith(tissue, "adipose"))
+
+
+# Testing what genes are shared between more than 2 tissues
+sum((table(flesh_sex$Gene.Symbol) >= 3))
+# One, and its AMELY, which means that there doesn't seem to be overlap
+# I'm gonna just make it adipose tissue
+
+
+adipose_sex <- flesh_sex %>% filter(startsWith(tissue, "adipose"))
+adipose_sex<- rbind(adipose_sex,top_gene_fat)
+#Order genes
+ordered_genes <- adipose_sex %>%
+  select(Gene.Symbol, Category) %>%
+  unique() %>% arrange(Category, Gene.Symbol)
+
+
+adipose_plot <- ggplot(adipose_sex) +
+  geom_point(aes(x = tissue, y = Gene.Symbol, color = direction, size = estimate_abs)) +
+  scale_color_manual(values = c("#0C7BDC","#FFC20A")) +
+  scale_y_discrete(limits = unique(ordered_genes$Gene.Symbol)) +
+  scale_x_discrete(labels = c("Subcutaneous", "Visceral")) +
+  geom_tile(aes(x = -1, y = Gene.Symbol,  fill = Category)) +
+  scale_fill_manual(values = c("#E66100", "#5D3A9B", "#E1BE6A", "#994F00")) +
+  #geom_rect(aes(xmin = Gene.Symbol, xmax= lead(Gene.Symbol), ymin = -1, ymax =-.5, fill = division), position = ) +
+  theme_minimal() +
+ # theme(axis.text.x = element_text(angle = 90)) +
+  xlab("Fat Types") +
+  ylab("Matrisome Genes") + 
+  scale_size_continuous(range = c(2,8)) +
+  labs(color = "Estimate Sex Association", size = "Beta Estimate")
+adipose_plot
+
+ggsave("output/adipose_sex_difference.pdf", width = 6, height = 12)
+```
+
+
+Combine all plots 
+```{r, height = 10, width = 14}
+sex_plot_obj <- ggarrange(sex_p_size_plot,
+                          skin_plot,
+                          adipose_plot, ncol = 3,
+          common.legend = TRUE,
+          widths = c(1, .70, .70),
+          labels = c("a", "b", "c")
+          )
+sex_plot_obj
+#annotate_figure(sex_plot_obj )
+
+ggsave(filename = "output/all_sex_plot.pdf", width = 13, height = 11)
+```
+
+
+
+Load in data from GTEx Sex Specific comparisons by Pietro et al
+Source: 
+```{r}
+library(reshape2)
+pietro_dat <- read.csv("input/12915_2017_352_MOESM3_ESM.csv")
+
+pietro_mat <- pietro_dat %>%
+  separate(Gene, c("Gene.Symbol", "Gene.ID"), sep = "_") %>%
+  filter(Gene.Symbol %in% mat_tab_core$Gene.Symbol )                        
+#Only include tissues with findings
+pietro_mat <- pietro_mat[, colSums(pietro_mat != 0) > 0]
+
+pietro_shared <- pietro_mat %>% filter(Gene.Symbol %in% master_lm_sex$Gene.Symbol)
+
+#Make a table with gene.symbol
+pietro_melt <- melt(pietro_shared, id.vars=c("Gene.Symbol", "Gene.ID")) %>% filter(value != 0) %>%
+  mutate(variable = tolower(variable))
+
+sort(table(pietro_melt$variable), decreasing = T)
+sort(table(master_lm_sex$tissue), decreasing = T)
+
+master_lm_sex$tissue_per <- str_replace_all(str_replace_all(master_lm_sex$tissue, pattern = "__", "."), "_", ".")
+pietro_melt$variable <- str_replace_all(pietro_melt$variable, "_", ".")
+
+unique(master_lm_sex$tissue_per)[!(unique(master_lm_sex$tissue_per) %in% unique(pietro_melt$variable))]
+unique(pietro_melt$variable[(unique(pietro_melt$variable) %in% unique(master_lm_sex$tissue_per))])
+
+pietro_melt <- pietro_melt %>%  mutate(direction = ifelse(value > 0, "Females", "Males"))
+
+pietro_matcher <- read.csv("input/pietro_matcher.csv")
+
+#Below we make a dataframe that says if the values are in both data.frames or not
+count_frame <- data.frame()
+for (match in seq_len(nrow(pietro_matcher))) {
+  if (pietro_matcher[match,1] == "" | pietro_matcher[match,2] == "") {
+    next
+  }
+  temp_piet <- pietro_melt %>% filter(variable %in% pietro_matcher[match,2])
+  temp_lm <- master_lm_sex %>% filter(tissue_per %in% pietro_matcher[match,1])
+  
+  temp_row  <- cbind(rbind(table(unique(temp_piet$Gene.Symbol) %in% unique(temp_lm$Gene.Symbol))),
+                   pietro_matcher[match,2])
+  if(!("TRUE" %in% colnames(temp_row))){
+    hold_matrix <- matrix(data = c(1),nrow = 1)
+    colnames(hold_matrix) <- "TRUE"
+    temp_row <- cbind(hold_matrix, temp_row)
+  }
+    if(!("FALSE" %in% colnames(temp_row))){
+    hold_matrix <- matrix(data = c(1),nrow = 1)
+    colnames(hold_matrix) <- "FALSE"
+    temp_row <- cbind(hold_matrix, temp_row)
+    temp_row <- temp_row[,c(2,1,3)]
+  }
+  
+  count_frame <- rbind(count_frame, temp_row)
+  
+    
+}
+
+pietro_in_lm  <- count_frame
+
+count_frame <- data.frame()
+for (match in seq_len(nrow(pietro_matcher))) {
+  if (pietro_matcher[match,1] == "" | pietro_matcher[match,2] == "") {
+    next
+  }
+  temp_piet <- pietro_melt %>% filter(variable %in% pietro_matcher[match,2])
+  temp_lm <- master_lm_sex %>% filter(tissue_per %in% pietro_matcher[match,1])
+  
+  temp_row  <- cbind(rbind(table(unique(temp_lm$Gene.Symbol) %in% unique(temp_piet$Gene.Symbol))),
+                   pietro_matcher[match,2])
+  if(!("TRUE" %in% colnames(temp_row))){
+    hold_matrix <- matrix(data = c(1),nrow = 1)
+    colnames(hold_matrix) <- "TRUE"
+    temp_row <- cbind(hold_matrix, temp_row)
+  }
+    if(!("FALSE" %in% colnames(temp_row))){
+    hold_matrix <- matrix(data = c(1),nrow = 1)
+    colnames(hold_matrix) <- "FALSE"
+    temp_row <- cbind(hold_matrix, temp_row)
+    temp_row <- temp_row[,c(2,1,3)]
+  }
+  
+  count_frame <- rbind(count_frame, temp_row)
+  
+    
+}
+
+lm_in_pietro  <- count_frame
+
+pietro_in_lm
+lm_in_pietro
+```
+
+
+```{r}
+#Make global column
+pietro_matcher <- pietro_matcher %>% mutate(global_tiss = ifelse(gtex != "", gtex, pietro))
+
+pietro_melt <- pietro_melt %>%
+  mutate(global_tiss = ifelse(variable %in% pietro_matcher$pietro, pietro_matcher$global_tiss, F))
+
+pietro_melt <- left_join(pietro_melt, pietro_matcher %>% select(pietro, global_tiss), by = c("variable" = "pietro"))
+
+master_lm_sex <- dplyr::rename(master_lm_sex, global_tiss = tissue_per)
+
+# gene | Tissue | Lm | Piet
+
+#Makes genes and tissues columns
+all_genes <- unique(c(master_lm_sex$Gene.Symbol, pietro_melt$Gene.Symbol))
+genes_tib <- as_tibble(all_genes)
+gene <- "AMELY"
+for (gene in all_genes) {
+  #Get max match length
+
+  gene_count <- sum(master_lm_sex$Gene.Symbol %in% gene)
+  
+  
+  tissues  <- unique(c(pietro_melt$global_tiss[pietro_melt$Gene.Symbol %in% gene],
+              master_lm_sex$global_tiss[master_lm_sex$Gene.Symbol %in% gene]))
+  
+  temp_frame <- as.data.frame(cbind(rep(gene, length(tissues)), tissues))
+  temp_frame$lm <- "Not Found"
+  temp_frame$lm <- NA
+  temp_frame$piet <- NA
+  for (row_n in seq_len(nrow(temp_frame))) {
+  temp_frame$lm <- if(temp_frame$V1[row_n] %in%
+                      master_lm_sex$Gene.Symbol[master_lm_sex$global_tiss %in% temp_frame$tissues[row_n]]){
+                        master_lm_sex$direction[master_lm_sex$Gene.Symbol == temp_frame$V1[row_n] &
+                                                  master_lm_sex$global_tiss %in% temp_frame$tissues[row_n]]
+                      }
+  }
+  }
+
+#------ Frustrated but trying new method where I bind the data frame
+sel_piet <- select(pietro_melt, Gene.Symbol, global_tiss = global_tiss.y, direction) %>%
+  mutate(study = "piet")
+sel_lm_sex <- select(master_lm_sex, Gene.Symbol, global_tiss, direction) %>%
+  mutate(study = "lm")
+bound_dat <- rbind(sel_piet, sel_lm_sex)
+
+sex_study_comp <- dcast(bound_dat, Gene.Symbol + global_tiss ~ study, value.var = "direction", fun.aggregate = 
+        function(x){ifelse(is.character(x), x, "not found")})
+sex_study_comp$lm[is.na(sex_study_comp$lm)] <- "not_found"
+sex_study_comp$piet[is.na(sex_study_comp$piet)] <- "not_found"
+
+table(sex_study_comp$lm, sex_study_comp$piet)
+
+print("Pietro et al. study")
+addmargins(table(pietro_melt$direction))
+print("Our results")
+addmargins(table(master_lm_sex$direction))
+print("A table comparing our genes to theirs, `lm` is ours")
+with(sex_study_comp, addmargins(table(lm, piet)))
+
+#Tissue comparison
+test <- dcast(bound_dat, Gene.Symbol ~ study, value.var = "global_tiss", fun.aggregate = 
+        function(x){ifelse(is.character(x), x, "not found")})
+
+#New for loop to test if genes are shared between tissues
+unique_dat <- bound_dat[,1:2] %>% unique()
+
+unique_dat <- unique_dat %>% unite("bound_dat", Gene.Symbol, global_tiss, remove = F)
+sel_piet <- unite(sel_piet, "bound_dat", Gene.Symbol, global_tiss, remove = F)
+sel_lm_sex <- unite(sel_lm_sex, "bound_dat", Gene.Symbol, global_tiss, remove = F)
+
+unique_dat  <- mutate(unique_dat, shared = case_when(
+                      bound_dat %in% sel_piet$bound_dat & bound_dat %in% sel_lm_sex$bound_dat ~ "both",
+                      bound_dat %in% sel_piet$bound_dat ~ "piet",
+                      bound_dat %in% sel_lm_sex$bound_dat ~ "lm"
+                    
+                    ))
+
+table(unique_dat$shared)
+
+table_shared_genes <- as.matrix(table(unique_dat$global_tiss, unique_dat$shared))
+table_shared_genes <- table_shared_genes[order(table_shared_genes[,1], decreasing = T),]
+table_shared_genes <- cbind(table_shared_genes,
+                            c((table_shared_genes[,1] + table_shared_genes[,2])),
+                            c(table_shared_genes[,1] + table_shared_genes[,3])) 
+
+colnames(table_shared_genes)[4:5] <- c("total_lm", "total_piet")
+
+write.csv(table_shared_genes, "output/shared_sex_tissues.csv", row.names = T)
+```
+## Adipose sex analysis is found in adipose_sex_analysis.rmd
+
+Age results statistical numbers
+
+```{r}
+#Total sig hits
+nrow(master_lm)
+
+#Total unique genes
+length(unique(master_lm$Gene.Symbol))
+
+#Gene most frequently found
+master_lm %>% dplyr::count(Gene.Symbol) %>% arrange(desc(n))
+
+#What found with opposite directionality the most
+
+master_lm_dir <-mutate(master_lm, direction = ifelse(estimates > 0, "positive", "negative"))
+dir_mat <-  as.matrix(table(master_lm_dir$Gene.Symbol, master_lm_dir$direction))
+ind <- !(dir_mat[,1] == 0 | dir_mat[,2] == 0)
+ind_2 <- (dir_mat[,1] == 0 | dir_mat[,2] == 0)
+dir_mat_ops <-  dir_mat[ind,]
+colSums(dir_mat[ind_2,] > 0 )
+
+#More positive or negative
+colSums(dir_mat)
+
+## ADIPOQ in how many tissues
+master_lm %>% filter(Gene.Symbol %in% "ADIPOQ") %>%
+  summarise(count = n(), avg_est = mean(estimates), std_est = sd(estimates))
+```
+Sex results statistical numbers
+```{r}
+length(unique(master_lm_sex$tissue))
+
+length(unique(master_lm_sex$Gene.Symbol))
+nrow(master_lm_sex)
+
+
+#SKin
+
+sum(table(skin_sex$Gene.Symbol) > 1)
+
+```

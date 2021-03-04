@@ -1,0 +1,825 @@
+---
+title: "Adipose sex analysis"
+author: "Tim Nieuwenhuis"
+date: "10/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DESeq2)
+library(tidyverse)
+library(grid)
+library(broom)
+library(EnvStats)
+library(pheatmap)
+library(ggpubr)
+#library(broom)
+source("~/Halushka Lab/Matrisome/age sex analysis/adding_linear_model_analysis/tim_scripts.R")
+mat_tab <- read.csv("../global_in//matrisome_hs_masterlist_EDIT_r.csv",fileEncoding="UTF-8-BOM")
+
+mat_tab <- mat_tab %>% filter(Division == "Core matrisome" | Category == "ECM Regulators")
+
+indv_phe <- read.csv("input/gtex_phenotypes_v8.csv")
+colnames(indv_phe)[2] <- "SUBJID"
+
+#Detect history of diabetes
+indv_phe <- mutate(indv_phe, diab_hist = str_detect(MHGENCMT, "[Dd]iabe"))
+
+indv_phe <- select(indv_phe, SUBJID, SEX, AGE, BMI,diab_hist)
+```
+
+
+
+
+#Read in data for both adipose tissues
+
+```{r cars}
+
+#Sub
+load("input/adipose_subcutaneous-vsd-unfiltered.rda")
+
+sub_dat <- assay(adipose_subcutaneousVSD)
+ind <- gtab$gene_name %in% mat_tab$Gene.Symbol 
+sub_dat <- sub_dat[ind,]
+sub_gtab <- gtab[ind,]
+
+#Visceral
+load("input/adipose_visceral__omentum-vsd-unfiltered.rda")
+
+visc_dat <- assay(adipose_visceral__omentumVSD)
+ind <- gtab$gene_name %in% mat_tab$Gene.Symbol 
+visc_dat <- visc_dat[ind,]
+visc_gtab <- gtab[ind,]
+
+```
+
+Simple analysis, make data usable in simple graphs
+```{r}
+#Sub dat
+rownames(sub_dat) <- sub_gtab$gene_name
+sub_dat <- as.data.frame(t(sub_dat))
+sub_dat <- rownames_to_column(sub_dat, "SAMPID")
+sub_dat$SUBJID <- shorter_gtex_names_vect(sub_dat) 
+sub_dat <- left_join(indv_phe,sub_dat)
+sub_dat$tissue <- "subcutaneous"
+
+#Visc dat
+rownames(visc_dat) <- visc_gtab$gene_name
+visc_dat <- as.data.frame(t(visc_dat))
+visc_dat <- rownames_to_column(visc_dat, "SAMPID")
+visc_dat$SUBJID <- shorter_gtex_names_vect(visc_dat) 
+visc_dat <- left_join(indv_phe, visc_dat)
+visc_dat$tissue <- "visceral"
+
+#All fat
+fat_dat <- rbind(sub_dat, visc_dat)
+fat_dat$SEX <- ifelse(fat_dat$SEX == 1, "Male", "Female")
+fat_dat <- select(fat_dat, SUBJID, SEX, AGE, BMI, SAMPID, tissue, everything()) %>%
+  filter(!is.na(SAMPID))
+
+```
+
+Pull out top 5 males bottom 5 males, top 5 females and bottom 5 females with match subcut and visceral tissue for MMP3
+```{r} 
+sub_dat_mmp3 <- sub_dat_final %>% select(SUBJID, SAMPID, SEX, BMI, MMP3)
+
+visc_dat_mmp3 <- visc_dat_final %>% select(SUBJID, SAMPID, SEX, BMI, MMP3)
+
+
+sub_filt_mmp3 <- filter(sub_dat_mmp3, SUBJID %in% visc_dat_mmp3$SUBJID) %>%
+  arrange(desc(MMP3))
+
+
+sub_filt_male <- filter(sub_filt_mmp3, SEX == "Male")
+sub_filt_female <- filter(sub_filt_mmp3, SEX == "Female")
+rbind(head(sub_filt_male, 5),
+      head(sub_filt_female,5),
+      tail(sub_filt_male, 5),
+      tail(sub_filt_female, 5))
+
+```
+
+Try scraping fibrosis data:
+
+```{r}
+samptab <- read.table("input/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt",
+                      header=TRUE,stringsAsFactors=FALSE,sep="\t",fill=TRUE,
+                      quote="")
+
+sub_samp <- filter(samptab, SMTSD == "Adipose - Subcutaneous",
+                   SAMPID %in% sub_dat_final$SAMPID) %>%
+  select(SAMPID, SMPTHNTS, SMTSD) %>% filter(
+    str_detect(SMPTHNTS, "[Ff]ib") |
+      str_detect(SMPTHNTS, "[Ff]asc")
+  ) %>% mutate(fibrous_bin = case_when(
+    str_detect(SMPTHNTS, "[9876][05]%") ~ "max fibrosis",
+    str_detect(SMPTHNTS, "5[05]") ~ "~50% fib",
+    str_detect(SMPTHNTS, "4[05]") ~ "~40% fib",
+    str_detect(SMPTHNTS, "3[05]") ~ "~30% fib",
+    str_detect(SMPTHNTS, "2[05]") ~ "~20% fib",
+    str_detect(SMPTHNTS, "1[05]") ~ "~10 fib",
+    str_detect(SMPTHNTS, "5%") ~ "~10 fib",
+    TRUE ~ "low fibrosis or other"
+  ))
+
+
+sub_samp_join <- left_join(sub_samp, sub_dat_final)
+
+chisq.test(sub_samp_join$SEX, sub_samp_join$fibrous_bin)
+
+sub_samp_join <- mutate(sub_samp_join, sex_num = ifelse(SEX == "Male",0, 1))
+
+
+model_log <- glm(sex_num ~ fibrous_bin,family=binomial(link='logit'), data = sub_samp_join)
+
+
+summary(model_log)
+
+sub_samp_join <- mutate(sub_samp_join, mmp3_cent = MMP3 - mean(sub_samp_join$MMP3))
+
+
+summary(lm(mmp3_cent ~ fibrous_bin, data = sub_samp_join))
+
+
+ggplot(sub_samp_join, aes(fibrous_bin, mmp3_cent)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+addmargins(table(sub_samp_join$SEX, sub_samp_join$fibrous_bin))
+
+
+
+####VISCERAL
+
+
+
+visc_samp <- filter(samptab,
+                   SAMPID %in% visc_dat_final$SAMPID) %>%
+  select(SAMPID, SMPTHNTS, SMTSD) %>% filter(
+    str_detect(SMPTHNTS, "[Ff]ib") |
+      str_detect(SMPTHNTS, "[Ff]asc")
+  ) %>% mutate(fibrous_bin = case_when(
+    str_detect(SMPTHNTS, "[9876][05]%") ~ "max fibrosis",
+    str_detect(SMPTHNTS, "5[05]") ~ "~50% fib",
+    str_detect(SMPTHNTS, "4[05]") ~ "~40% fib",
+    str_detect(SMPTHNTS, "3[05]") ~ "~30% fib",
+    str_detect(SMPTHNTS, "2[05]") ~ "~20% fib",
+    str_detect(SMPTHNTS, "1[05]") ~ "~10 fib",
+    str_detect(SMPTHNTS, "5%") ~ "~10 fib",
+    TRUE ~ "low fibrosis or other"
+  ))
+
+
+visc_samp$fibrous_bin <- factor(visc_samp$fibrous_bin,
+                                levels = c(
+                                  "max fibrosis",
+                                  "~50% fib",
+                                  "~40% fib",
+                                  "~30% fib",
+                                  "~20% fib",
+                                  "~10% fib",
+                                  "low fibrosis or other"
+                                ))
+
+visc_samp_join <- left_join(visc_samp, visc_dat_final)
+
+chisq.test(visc_samp_join$SEX, visc_samp_join$fibrous_bin)
+
+visc_samp_join <- mutate(visc_samp_join, sex_num = ifelse(SEX == "Male",0, 1))
+
+
+model_log <- glm(sex_num ~ fibrous_bin,family=binomial(link='logit'), data = visc_samp_join)
+
+
+summary(model_log)
+
+visc_samp_join <- mutate(visc_samp_join, mmp3_cent = MMP3 - mean(visc_samp_join$MMP3))
+
+
+summary(lm(mmp3_cent ~ fibrous_bin, data = visc_samp_join))
+
+
+ggplot(visc_samp_join, aes(fibrous_bin, mmp3_cent)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+addmargins(table(visc_samp_join$SEX, visc_samp_join$fibrous_bin))
+
+#### read in the cluster data
+sub_profiles <- read.csv(file = "../../manual/adipose/adipose_subcutaneous-cluster-profiles.csv")
+colnames(sub_profiles)[1] <- "SAMPID"
+sub_samp_join <- left_join(sub_samp_join, sub_profiles)
+
+
+ggplot(sub_samp_join, aes(SEX, A)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+summary(lm(A ~ SEX, data =sub_samp_join))
+
+
+ggplot(sub_samp_join, aes(SEX, B)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+summary(lm(B ~ SEX, data =sub_samp_join))
+
+ggplot(sub_samp_join, aes(SEX, C)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+summary(lm(C ~ SEX, data =sub_samp_join))
+
+ggplot(sub_samp_join, aes(fibrous_bin, A)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+
+ggplot(sub_samp_join, aes(fibrous_bin, B)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+
+ggplot(sub_samp_join, aes(fibrous_bin, C)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+
+
+####
+
+sub_genes<- c("RSPO1", "PAPPA2", "FBLN7", "ADAM23", "IGFBP5", "COL7A1", "ITIH1", 
+"ITIH3", "IGSF10", "SERPINI1", "IGFBP7", "MMRN1", "NPNT", "TGFBI", 
+"COL21A1", "SMOC2", "IGFBP3", "RELN", "SSPO", "HTRA4", "SBSPON", 
+"ADAMTSL2", "SPOCK2", "LGI1", "HTRA1", "MMP7", "MMP27", "MMP3", 
+"ADAMTS15", "MMP19", "F10", "GAS6", "PCSK6", "NTN1", "LAMA1", 
+"ADAMTSL5", "CPAMD8", "LTBP4", "WISP2", "MMP9", "CSTB", "EMID1", 
+"COL4A6", "COL4A5")
+
+
+sub_profiles_genes <- read.csv(file = "../../manual/adipose/adipose_subcutaneous-gene-clusters-high-variance_mat.csv")
+
+sum(sub_profiles_genes$A %in% sub_genes)
+sum(sub_profiles_genes$B.1 %in% sub_genes)
+sum(sub_profiles_genes$B.2 %in% sub_genes)
+sum(sub_profiles_genes$C %in% sub_genes)
+
+
+
+```
+
+
+
+
+
+
+```{r}
+
+#########################
+visc_profiles <- read.csv(file = "../../Tool Building/v8_output/adipose_visceral__omentum-cluster-profiles.csv")
+colnames(visc_profiles)[1] <- "SAMPID"
+visc_samp_join <- left_join(visc_samp_join, visc_profiles)
+
+
+ggplot(visc_samp_join, aes(SEX, A)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+summary(lm(A ~ SEX, data =visc_samp_join))
+
+
+ggplot(visc_samp_join, aes(SEX, B)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+summary(lm(B ~ SEX, data =visc_samp_join))
+
+ggplot(visc_samp_join, aes(SEX, C)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+summary(lm(C ~ SEX, data =visc_samp_join))
+
+ggplot(visc_samp_join, aes(fibrous_bin, A)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+
+ggplot(visc_samp_join, aes(fibrous_bin, B)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+
+ggplot(visc_samp_join, aes(fibrous_bin, C)) +
+  geom_boxplot() +
+  facet_grid(~SEX) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1))
+
+```
+
+
+
+
+```{r}
+order_B_sub <- sub_samp_join %>%
+  arrange(desc(B)) %>%
+  filter(SUBJID %in% visc_samp_join$SUBJID) %>%
+  select(SAMPID, SUBJID, B, fibrous_bin, SEX, SMTSD)
+
+order_M_sub <- order_B_sub %>% filter(SEX == "Male")
+order_F_sub <- order_B_sub %>% filter(SEX == "Female")
+
+top_M_sub <- order_M_sub %>%
+  slice_max(order_by = B, n = 5) %>%
+  mutate(loc = "top")
+  
+bot_M_sub <- order_M_sub %>%
+  slice_min(order_by = B, n = 5) %>%
+  mutate(loc = "bot")
+
+top_F_sub <- order_F_sub %>%
+  slice_max(order_by = B, n = 5) %>%
+  mutate(loc = "top")
+
+bot_F_sub <- order_F_sub %>%
+  slice_min(order_by = B, n = 5) %>%
+  mutate(loc = "bot")
+
+sub_bound <- rbind(top_M_sub, bot_M_sub, top_F_sub, bot_F_sub)
+
+
+
+
+visc_4_sub <- visc_samp_join %>%
+  filter(SUBJID %in% sub_bound$SUBJID) %>%
+  select(SAMPID, SUBJID, B, fibrous_bin, SEX, SMTSD)
+
+##Add visc top or bottom
+location_dat <- sub_bound %>% select(SUBJID, loc)
+
+visc_4_sub <- left_join(visc_4_sub, location_dat)
+
+fat_imagej_bind <- rbind(sub_bound, visc_4_sub)
+
+randomized_bind <- fat_imagej_bind %>% select(SAMPID)
+
+
+set.seed(123)
+randomized_bind <- randomized_bind[sample(nrow(randomized_bind)),,drop = F]
+
+write.csv(randomized_bind, "output/randomized_fat.csv", row.names = F)
+
+```
+
+Pull out top 5 males bottom 5 males, top 5 females and bottom 5 females with match subcut and visceral tissue for B
+```{r} 
+
+sub_dat_B <- left_join(sub_dat_final, sub_profiles) %>%
+  select(SUBJID, SEX, AGE, SAMPID, tissue, B)
+
+
+
+visc_dat_B <- left_join(visc_dat_final, visc_profiles) %>%
+  select(SUBJID, SEX, AGE, SAMPID, tissue, B)
+
+
+
+sub_filt_B <- filter(sub_dat_B, SUBJID %in% visc_dat_B$SUBJID) %>%
+  arrange(desc(B))
+
+
+sub_filt_B_male <- filter(sub_filt_B, SEX == "Male")
+sub_filt_B_female <- filter(sub_filt_B, SEX == "Female")
+top_bottom_B_sub  <-  rbind(head(sub_filt_B_male, 5),
+          head(sub_filt_B_female,5),
+          tail(sub_filt_B_male, 5),
+          tail(sub_filt_B_female, 5))
+
+
+matched_visc <- visc_dat_B %>% filter(SUBJID %in% top_bottom_B_sub$SUBJID)
+
+
+top_bottom_B_visc_sub <- rbind(top_bottom_B_sub, matched_visc)
+
+
+untested_visc_and_subs <- top_bottom_B_visc_sub %>% filter(!(SAMPID %in% randomized_bind$SAMPID)
+)
+
+
+random_untested_visc_and_subs <- select(untested_visc_and_subs, SAMPID)
+
+
+random_untested_visc_and_subs <- random_untested_visc_and_subs[sample(nrow(random_untested_visc_and_subs)),,drop = F]
+
+
+write.csv(random_untested_visc_and_subs, "output/randomized_fat_to_add.csv", row.names = F)
+```
+
+
+
+```{r}
+fat_percent <- read.csv("input/tissue_imgs/adipose_tissue/randomized_fat_pieces.csv")
+
+fat_percent_filt <- fat_percent %>% filter(!is.na(percent)) %>% select(-filter)
+
+
+sub_4_bind <- sub_samp_join %>% select(SAMPID, SMTSD, SEX, fibrous_bin, SMPTHNTS)
+
+visc_4_bind <- visc_samp_join %>% select(SAMPID, SMTSD, SEX, fibrous_bin, SMPTHNTS)
+
+fat_bound <- rbind(sub_4_bind, visc_4_bind)
+
+#Include non scrape data
+
+fat_percent_dat <- left_join(fat_percent_filt, fat_imagej_bind, by= "SAMPID")
+
+ggplot(fat_percent_dat, aes(x = SEX, y = percent)) +
+  geom_violin() +
+  facet_grid(~SMTSD) +
+  geom_jitter(height = 0 , width =0.3) +
+  labs(title = "Percent Adipose on Sex and Tissue")  +
+  ylab("Percent Adipose Tissue")
+
+
+ggplot(fat_percent_dat, aes(x = loc, y = percent)) +
+  geom_violin() +
+  facet_grid(~SMTSD) +
+  geom_jitter(height = 0 , width =0.3)  +
+  labs(title = "Percent Adipose on B expression and Tissue") +
+  ylab("Percent Adipose Tissue")
+
+
+#Make median percent
+
+fat_percent_median <- fat_percent_dat %>%
+  group_by(SAMPID) %>%
+  summarise(SMTSD, B, SEX, med_per = median(percent), loc, .groups = 'drop')
+
+
+ggplot(fat_percent_median, aes(x = SEX, y = med_per)) +
+  geom_violin() +
+  facet_grid(~SMTSD) +
+  geom_jitter(height = 0 , width =0.3) +
+  labs(title = "Median Percent Adipose on Sex and Tissue") +
+  ylab("Median Percent Adipose Tissue")
+
+
+ggplot(fat_percent_median, aes(x = loc, y = med_per)) +
+  geom_violin() +
+  facet_grid(~SMTSD) +
+  geom_jitter(height = 0 , width =0.3)  +
+  labs(title = "Median Percent Adipose on B expression and Tissue") +
+  ylab("Median Percent Adipose Tissue")
+
+
+############## Fat percent data
+
+ggplot(fat_percent_dat, aes(x = B, y = percent)) +
+  geom_point() +
+  facet_grid(~SMTSD) 
+
+#############
+
+
+summary(lm(formula = percent ~ B + SMTSD, data = fat_percent_dat))
+
+summary(lm(formula = med_per ~ SEX + SMTSD, data = fat_percent_median))
+
+summary(lm(formula = med_per ~ B + SMTSD, data = fat_percent_median))
+```
+
+
+
+
+Make B subC profile for Visc samples
+```{r}
+
+sub_genes <- read.csv(file = "input/adipose_subcutaneous-gene-clusters-high-variance_mat.csv")
+
+B_clust <- sub_genes$B.1[sub_genes$B.1 != ""]
+
+#Visc
+
+visc_dat <- visc_dat %>% filter(!is.na(SAMPID))
+visc_B_genes <- t(select(visc_dat, B_clust))
+visc_B_genes_cent <- visc_B_genes - rowMeans(visc_B_genes)
+visc_z_score <- visc_B_genes_cent / apply(visc_B_genes_cent, 1, mad)
+visc_bz_score <- colMeans(visc_z_score)
+
+names(visc_bz_score) <- visc_dat$SAMPID
+visc_B_df <- as.data.frame(visc_bz_score, row.names = names(visc_bz_score)) %>%
+  rownames_to_column("SAMPID")
+colnames(visc_B_df)[2] <- "B.1 Zscore"
+
+#SubC
+
+sub_dat <- sub_dat %>% filter(!is.na(SAMPID))
+sub_B_genes <- t(select(sub_dat, B_clust))
+sub_B_genes_cent <- sub_B_genes - rowMeans(sub_B_genes)
+sub_z_score <- sub_B_genes_cent / apply(sub_B_genes_cent, 1, mad)
+sub_bz_score <- colMeans(sub_z_score)
+
+names(sub_bz_score) <- sub_dat$SAMPID
+subc_B_df <- as.data.frame(sub_bz_score, row.names = names(sub_bz_score)) %>%
+  rownames_to_column("SAMPID")
+colnames(subc_B_df)[2] <- "B.1 Zscore"
+
+
+#Join them for left_join later on
+
+
+fat_B_df <- rbind(subc_B_df, visc_B_df)
+```
+
+
+
+Move this code up top when you can
+```{r}
+
+
+### general profiles
+visc_profiles_b <- select(visc_profiles, SAMPID, B)
+sub_profiles_b <- select(sub_profiles, SAMPID, B)
+
+all_profiles_b <- rbind(visc_profiles_b, sub_profiles_b)
+
+
+test <- left_join(untested_visc_and_subs, fat_percent)
+
+
+ggplot(test, aes(B, percent)) +
+  geom_point() +
+  facet_grid(~tissue)
+
+test_2 <- left_join(fat_percent, samptab)
+test_2 <- left_join(test_2,all_profiles_b)
+test_2$SUBJID <- shorter_gtex_names_vect(test_2)
+test_2 <- left_join(test_2, indv_phe)
+test_2$SEX <- ifelse(test_2$SEX == 1, "Male", "Female")
+test_2 <- left_join(test_2, fat_B_df)
+
+
+ggplot(test_2, aes(B, percent)) +
+  geom_point() +
+  facet_grid(~SMTSD)
+
+ggplot(test_2, aes(SEX, percent)) +
+  geom_violin() +
+  geom_jitter(width = .2, height = 0) +
+  facet_grid(~SMTSD)
+
+test_median <- test_2 %>%
+  group_by(SAMPID) %>%
+  summarise(SMTSD, B, `B.1 Zscore`, SEX, med_per = median(percent), .groups = 'drop') %>%unique()
+
+ggplot(test_median, aes(B, med_per)) +
+  geom_point() +
+  facet_grid(~SMTSD)
+
+ggplot(test_median, aes(SEX, med_per)) +
+  geom_violin() +
+  geom_jitter(width = .2, height = 0) +
+  facet_grid(~SMTSD)
+
+
+library(lme4)
+library(lmerTest)
+model_all_fat <- lmer(percent ~ B + SEX + SMTSD + (1|SUBJID), data = test_2)
+
+summary(model_all_fat)
+
+test_2_sub <- filter(test_2, str_detect(SMTSD, "Sub"))
+
+model_sub_fat <- lmer(percent ~ B + SEX + (1|SUBJID), data = test_2_sub)
+
+summary(model_sub_fat)
+
+
+table(test_median$SEX)
+table(test_median$SMTSD)
+
+#######New B score
+
+ggplot(test_2, aes(`B.1 Zscore`, percent)) +
+  geom_point() +
+  facet_grid(~SMTSD)
+
+ggplot(test_2, aes(SEX, percent)) +
+  geom_violin() +
+  geom_jitter(width = .2, height = 0) +
+  facet_grid(~SMTSD)
+
+ggplot(test_median, aes(`B.1 Zscore`, med_per)) +
+  geom_point() +
+  facet_grid(~SMTSD)
+
+ggplot(test_median, aes(`B.1 Zscore`, med_per)) +
+  geom_point(aes(shape = SMTSD)) 
+
+
+ggplot(test_median, aes(SEX, med_per)) +
+  geom_violin() +
+  geom_jitter(width = .2, height = 0) +
+  facet_grid(~SMTSD)
+
+###
+
+test_2_visc <- filter(test_2, str_detect(SMTSD, "Vis"))
+
+model_visc_fat <- lmer(percent ~ `B.1 Zscore` + SEX + (1|SUBJID), data = test_2_visc)
+
+summary(model_visc_fat)
+
+model_sub_fat <- lmer(percent ~ `B.1 Zscore` + SEX + BMI+ (1|SUBJID), data = test_2_sub)
+
+summary(model_sub_fat)
+
+
+model_all_fat <- lmer(percent ~ `B.1 Zscore` + SEX + SMTSD + (1|SUBJID), data = test_2)
+
+summary(model_all_fat)
+
+```
+
+Plots and numbers for paper
+
+
+Plot comparing B scores between sexes
+```{r}
+#### Male female cluster B Subcut
+subc_B_df$SUBJID <- shorter_gtex_names_vect(subc_B_df , col = 1)
+subc_b_df_2 <- left_join(subc_B_df, indv_phe) 
+subc_b_df_2$SEX <- ifelse(subc_b_df_2$SEX == 1, "Male", "Female")
+
+subc_B_plot <- ggplot(subc_b_df_2, aes(SEX, `B.1 Zscore`, fill = SEX)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1)) +
+  geom_jitter(alpha = 5, height = 0, width = .3)+
+  scale_fill_manual(values = c("#0C7BDC", "#FFC20A"))+
+  theme_classic() +
+  theme(legend.position = "none")
+
+subc_sex_model <- lm(`B.1 Zscore` ~ SEX + BMI, data =subc_b_df_2)
+tidy_sub_model <- tidy(subc_sex_model)
+sub_table <- ggtexttable(tidy_sub_model)
+sub_df <- tidy_sub_model
+
+#### Male female cluster B Visc
+visc_B_df$SUBJID <- shorter_gtex_names_vect(visc_B_df, col = 1)
+visc_b_df_2 <- left_join(visc_B_df, indv_phe) 
+visc_b_df_2$SEX <- ifelse(visc_b_df_2$SEX == 1, "Male", "Female")
+
+visc_B_plot <- ggplot(visc_b_df_2, aes(SEX, `B.1 Zscore`, fill = SEX)) +
+  geom_boxplot() +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1)) +
+  geom_jitter(alpha = 5, height = 0, width = .3)+
+  scale_fill_manual(values = c("#0C7BDC", "#FFC20A"))+
+  theme_classic() +
+  theme(legend.position = "none")
+
+visc_B_plot
+
+visc_sex_model <- lm(`B.1 Zscore` ~ SEX + BMI, data =visc_b_df_2)
+tidy_visc_model <- tidy(visc_sex_model)
+visc_table <- ggtexttable(tidy_visc_model)
+
+subc_b_df_2$Tissue <- "Subcutaneous Adipose"
+visc_b_df_2$Tissue <- "Visceral Adipose"
+fat_b_df_2 <- rbind(subc_b_df_2, visc_b_df_2)
+fat_B_plot <- ggplot(fat_b_df_2, aes(SEX, `B.1 Zscore`, fill = SEX)) +
+  geom_boxplot(outlier.alpha = 0) +
+  stat_n_text() + theme(axis.text.x = element_text(angle = 80, hjust = 1)) +
+  geom_jitter(alpha = .5, height = 0, width = .3)+
+  scale_fill_manual(values = c("#0C7BDC", "#FFC20A"))+
+  theme_classic() +
+  theme(legend.position = "none") +
+  facet_grid(~Tissue)
+
+
+#text_plots <- ggarrange(visc_table, sub_table)
+
+final_b_plot <- ggarrange(fat_B_plot, sub_table, visc_table, nrow = 3,
+                          heights = c(1, .3, .3),
+                          labels = c("", "Results of Subcutaneous Linear Model",
+                                     "Results of Visceral Linear Model"))
+
+final_b_plot
+ggsave("output/fig_3D_sex_b1_score.pdf", width =  7, height = 8)
+
+
+
+```
+
+Plot for comparing 
+
+```{r}
+test_median <- mutate(test_median, Tissue = ifelse(str_detect(SMTSD, "ubcu"), "Subcutaneous Adipose",
+                               "Visceral Adipose"))
+test_2 <-  mutate(test_2, Tissue = ifelse(str_detect(SMTSD, "ubcu"), "Subcutaneous Adipose",
+                               "Visceral Adipose"))
+
+
+bz_percent_plot <- ggplot(test_median, aes(`B.1 Zscore`, med_per, color = SEX)) +
+  geom_point(alpha = .65) +
+  scale_color_manual(values = c("#0C7BDC", "#FFC20A")) +
+  facet_grid(~Tissue) + 
+  ylab("Percent Adipose") +
+  theme_classic() 
+  
+
+test_2_visc <- filter(test_2, str_detect(SMTSD, "Vis"))
+
+model_visc_fat <- lmer(percent ~ `B.1 Zscore` + SEX + BMI + (1|SUBJID), data = test_2_visc)
+
+summ_visc_fat<- summary(model_visc_fat)
+visc_coeff<- as.data.frame(summ_visc_fat$coefficients)
+visc_coeff_tab <- rownames_to_column(visc_coeff, "term") %>%
+    select(term, estimate = Estimate,
+            std.error = `Std. Error`,
+            statistic = `t value`,
+            p.value = `Pr(>|t|)`) %>% 
+    mutate(term = str_replace_all(term, "`", ""))
+
+
+visc_per_table <- ggtexttable(visc_coeff_tab)
+
+model_sub_fat <- lmer(percent ~ `B.1 Zscore` + SEX + BMI + (1|SUBJID), data = test_2_sub)
+
+summ_sub_fat <- summary(model_sub_fat)
+
+sub_coeff <- as.data.frame(summ_sub_fat$coefficients)
+
+sub_coeff_tab <- rownames_to_column(sub_coeff, "term") %>%
+    select(term, estimate = Estimate,
+            std.error = `Std. Error`,
+            statistic = `t value`,
+            p.value = `Pr(>|t|)`) %>% 
+    mutate(term = str_replace_all(term, "`", ""))
+
+sub_per_table <- ggtexttable(sub_coeff_tab)
+
+ggarrange(bz_percent_plot, sub_per_table, visc_per_table, nrow = 3,
+          heights = c(.8, .5, .5),
+          labels = c("", "Results of Subcutaneous Linear Mixed Model",
+                        "Results of Visceral Linear Mixed Model"))
+
+
+ggsave("output/bzscore_percent_fat_figure.pdf", width =  7, height = 8)
+
+
+
+```
+
+```{r, height = 8, width = 7}
+ggarrange(fat_B_plot, bz_percent_plot, nrow = 2, labels = c("a.", "b."),
+          common.legend = T)
+
+ggsave("output/fat_B_figures.pdf", width =  7, height = 8)
+
+table_plots <- ggarrange(sub_table, visc_table, sub_per_table, visc_per_table,
+          labels = c("Linear Model of B.1 Cluster Z-Scores in Subcutaneous Fat",
+                     "Linear Model of B.1 Cluster Z-Scores in Visceral Fat",
+                     "Linear Model of Percent Adipose in Subcutaneous Fat",
+                     "Linear Model of Percent Adipose in Visceral Fat"),
+          hjust = -.2,
+          nrow = 4,
+          height = c(.2,.2,.2,.2))
+
+table_plots$`1`
+
+ggsave("output/fat_B_tables.pdf", width =  7, height = 8)
+
+rbind(tidy_sub_model,
+tidy_visc_model,
+sub_coeff_tab,
+visc_coeff_tab)
+
+write.csv(tidy_sub_model, "output/suppl_table_B_cluster_function_of_sex_sub.csv")
+write.csv(tidy_visc_model, "output/suppl_table_B_cluster_function_of_sex_visc.csv")
+write.csv(sub_coeff_tab, "output/suppl_table_percent_fat_function_of_sex_n_clust_sub.csv")
+
+library(xlsx)
+write.xlsx(as.data.frame(tidy_sub_model), file="output/suppl_table_fat.xlsx", sheetName="B function of Sex Sub", row.names=F)
+write.xlsx(as.data.frame(tidy_visc_model), file="output/suppl_table_fat.xlsx", sheetName="B function of Sex Visc", row.names=F, append = T)
+write.xlsx(as.data.frame(sub_coeff_tab), file="output/suppl_table_fat.xlsx", sheetName="Fat percent function of B Sub", row.names=F, append = T)
+write.xlsx(as.data.frame(visc_coeff_tab), file="output/suppl_table_fat.xlsx", sheetName="Fat percent function of B Visc", row.names=F, append = T)
+
+```
+
+Adipose Sex Numbers
+```{r}
+#numbers
+#subc_b_df_2
+table(test_median$Tissue)
+table(test_median$SEX, test_median$Tissue)
+
+#visc_b_df_2
+```
