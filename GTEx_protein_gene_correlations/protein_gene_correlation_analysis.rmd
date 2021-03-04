@@ -14,8 +14,9 @@ library(EnvStats)
 Load raw files
 ```{r}
 ## Protein log2 normalized coutns
+## Source https://www.sciencedirect.com/science/article/pii/S0092867420310783#mmc3
 protein_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc3.xlsx",sheet = 6,skip = 0)
-
+## Source https://www.sciencedirect.com/science/article/pii/S0092867420310783#mmc4
 ## Gene log2 normalized tpms
 gene_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc4.xlsx",sheet = 2,skip = 0)
 
@@ -25,6 +26,7 @@ hgnc_filt <- hgnc_raw[-1:-2, c(1,4)]
 colnames(hgnc_filt) <- hgnc_raw[2, c(1,4)]
 
 ## Load in their correlations across tissues
+## SOurce https://www.sciencedirect.com/science/article/pii/S0092867420310783#mmc5
 corr_raw <- readxl::read_xlsx("data_in/1-s2.0-S0092867420310783-mmc5.xlsx",sheet = 2,skip = 1, col_types = "guess")
 corr_select <- select(corr_raw, Gene, Ensembl, spearman_cor_across_tissue, pval_spearman_cor_across_tissue) %>%
     mutate(pval_spearman_cor_across_tissue = as.numeric(pval_spearman_cor_across_tissue),
@@ -331,44 +333,6 @@ colnames(gene_df_gencor) <- gene_filt_samps$name_tiss[match(colnames(gene_df_gen
 ```
 
 ```{r}
-## For loop pairing each sample in a list as a data.frame
-k = 1
-gene_pairs_list <- list()
-gene_pair_rho_list <- list()
-for (k in seq(nrow(prot_df_filt))) {
-    gene_name <- rownames(prot_df_filt)[k]
-    ## Pull out protein sample and then gene sample
-    temp_prot <- prot_df_gencor[gene_name,,drop=T]
-    temp_gene <- gene_df_gencor[gene_name,,drop=T]
-    
-    ##Order samples
-    temp_gene <- temp_gene[,match(colnames(temp_prot), colnames(temp_gene))]
-    
-    joined_temp <- cbind(temp_prot, temp_gene)
-    
-    joined_mat <- joined_temp[rownames(joined_temp) %in% hgnc_matrisome$ensembl_id,]
-    
-    joined_mat_clean <- joined_mat[!is.na(joined_mat[,1]) | joined_mat[,1] %in% 0 ,]
-    
-    all_gene_list[[temp_nametiss]] <- joined_temp
-    matrisome_gene_list[[temp_nametiss]] <- joined_mat
-    matrisome_gene_list_clean[[temp_nametiss]] <- joined_mat_clean
-    ## Correlations
-    all_gene_cor <- cor.test(joined_temp[,1], joined_temp[,2],method = "spearman")
-    matrisome_gene_cor <- cor.test(joined_mat[,1], joined_mat[,2],method = "spearman")
-    matrisome_gene_cor_clean <- cor.test(joined_mat_clean[,1], joined_mat_clean[,2],method = "spearman")
-    # no_na_ind <- !is.na(joined_mat[,1])
-    # temp_mat_nona <- joined_mat[no_na_ind,]
-    all_gene_cor_list[[temp_nametiss]] <- all_gene_cor
-    matrisome_gene_cor_list[[temp_nametiss]] <- matrisome_gene_cor
-    matrisome_gene_cor_list_clean[[temp_nametiss]] <- matrisome_gene_cor_clean
-}
-
-```
-
-
-
-```{r}
 rho_mat_df <- data.frame(t(data.frame(mat_rhos))) %>% rownames_to_column("name_tiss")
 rho_mat_df$name_tiss <- names(mat_rhos) 
 
@@ -461,7 +425,7 @@ held_df_mat_ord <- held_df_mat[match(rownames(ref_two_mat),rownames(held_df_mat)
 
 bound_data <- (cbind(ref_two_mat, held_df_mat_ord))
 
-View(bound_data[order(rownames(bound_data)),order(colnames(bound_data))])
+#View(bound_data[order(rownames(bound_data)),order(colnames(bound_data))])
 
 ```
 Tables for mark
@@ -556,7 +520,9 @@ pheatmap(cor_master,
 pheatmap(cor_master,cluster_rows = F, cluster_cols = F,
          filename = "data_out/gene_protein_corr_heatmap_noclust.pdf", width = 8, height = 8)
 
-
+## Get min and max pairs that aren't 1
+melt_cor_master <- reshape2::melt(cor_master) %>% filter(value != 1)
+melt_cor_master %>% arrange(desc(value))
 ## Now matrisome
 master_join_mat <- left_join(joined_rand, wang_join) %>% select(Gene.ID, Gene.name, everything()) %>%
             ## Make sure as much genes are shareed
@@ -573,6 +539,17 @@ cor_master_matrisome <- cor(master_mat_matrix, method = "spearman", use="complet
 pheatmap(cor_master_matrisome,cluster_rows = F, cluster_cols = F,
          filename = "data_out/gene_protein_corr_matrisome_heatmap_noclust.pdf", width = 8, height = 8)
 
+
+melt_cor_master_matrisoem <- reshape2::melt(cor_master_matrisome) %>% filter(value != 1)
+melt_cor_master_matrisoem %>% arrange(desc(value))
+
+
+
+cor_bind_master <- rbind(cor_master, cor_master_matrisome)
+
+
+pheatmap(cor_bind_master,cluster_rows = F, cluster_cols = F,
+         filename = "data_out/doubled_heatmap_for_scale.pdf", width = 8, height = 12)
 ```
 
 
