@@ -156,6 +156,8 @@ rownames(cllpse_brain_cor) <- gtex_dict$abrreviated[map]
 
 plot <- pheatmap(cllpse_brain_cor,
                 main="Core Marisomes and ECM Regulator Collapsed Brain",
+                #legend_breaks=c(2,1.5,1,0.5,0), 
+                #legend_labels=c("-1.0","-0.5","0","0.5","1.0"),
                 fontsize=5, fontsize_row=5, fontsize_col=5,
                 cluster_cols = dendo, cluster_rows = dendo,
                filename="output/core_n_reg_clpse_brain_correlation_v8.pdf",
