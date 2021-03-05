@@ -1,0 +1,581 @@
+knitr::opts_chunk$set(echo = TRUE)
+library(TCGAbiolinks)
+library(recount)
+library(tidyverse)
+library(DESeq2)
+library(RColorBrewer)
+library(preprocessCore)
+source("global_in/tim_scripts.R")
+
+
+## Functions
+short_gtex_vect2vect <- function(x){
+    #If else statement used to determine if the name is long or short, if already short nothing should happen, if long, then it will be appropriately shortened. This code works off the assumption that the gtex IDs are either 4 or 5 characters in length
+    
+    
+    #Generating stand in list
+    shortname <- vector()
+    #Used subset to create a vector, drop needed to be true to make the tibble output a vector
+    for (k in x) {
+        #If else for 5 or 4 length IDs
+        #Using the "-" to determine if the id has 4 or 5 characters
+        if(substr(k, start = 10, stop = 10) == "-"){
+            #4 length
+            m <- substr(k, 1, 9)
+            shortname <- c(shortname, m)
+        } else{
+            #5 length
+            m <- substr(k, 1, 10)
+            
+            shortname <- c(shortname, m)
+            
+        }
+        
+    }
+    
+    
+    
+    return(shortname)
+}
+
+
+
+## set up loop
+
+studies = c("gtex", "tcga")
+n_o_c = c("n", "c")
+run_tcga_n = TRUE
+tissue = "liver"
+#cancer_tissue = "colorectal"
+cancer_tissue = tissue
+#cancer_type = "PRAD"
+specific_cancer = TRUE
+#hist_type = "Colon Adenocarcinoma" 
+#specific_sex = TRUE
+sex_type = "FEMALE"
+specific_tissue = FALSE
+tissue_type = "Esophagus - Mucosa"
+quantile_analysis = TRUE
+tissue_stamp = paste0(tissue,ifelse(quantile_analysis == TRUE, "_quant",""))
+## List cancer types
+#table(tcga_recount2[[paste0(studies[2],"_",tissue)]]$cgc_case_histological_diagnosis )
+## gtex_n_scaled$smtsd
+
+all_tissues <- c("colon", "prostate", "breast",
+                 "thyroid", "lung", "esophagus",
+                 "ovary", "stomach", "liver", "pancreas")
+
+for (tissue in all_tissues) {
+    
+
+## Generate consistent selection based on the tissue selected
+
+hist_type <-case_when(tissue == "colon" ~ "Colon Adenocarcinoma",
+                      tissue == "prostate" ~ "Prostate Adenocarcinoma Acinar Type",
+                      tissue == "breast" ~ "Infiltrating Ductal Carcinoma",
+                      tissue == "thyroid" ~ "Thyroid Papillary Carcinoma - Classical/usual",
+                      tissue == "ovary" ~ "Serous Cystadenocarcinoma",
+                      tissue == "stomach" ~ c("Stomach  Adenocarcinoma  Diffuse Type",
+                                              "Stomach  Adenocarcinoma  Not Otherwise Specified (NOS)",
+                                              "Stomach  Intestinal Adenocarcinoma  Tubular Type",
+                                              " Stomach Intestinal Adenocarcinoma Mucinous Type",
+                                              "Stomach Intestinal Adenocarcinoma Papillary Type"),
+                      tissue == "pancreas" ~ "Pancreas-Adenocarcinoma Ductal Type",
+                      tissue == "liver" ~ "Hepatocellular Carcinoma"
+)
+cancer_type <-case_when(tissue == "colon" ~ "COAD",
+                        tissue == "prostate" ~ "PRAD",
+                        tissue == "breast" ~ "BRCA",
+                        tissue == "thyroid" ~ "THCA",
+                        tissue == "lung" ~ "LUAD",
+                        tissue == "esophagus" ~ "ESCA",
+                        tissue == "ovary" ~ "OV",
+                        tissue == "stomach" ~ "STAD",
+                        tissue == "liver" ~ "LIHC",
+                        tissue == "pancreas" ~ "PAAD")
+#specific_cancer <- ifelse(tissue == "lung", FALSE, TRUE)
+specific_cancer <- case_when(tissue == "lung" ~ FALSE,
+                             tissue == "esophagus" ~ FALSE,
+                             TRUE ~ TRUE)
+
+specific_tissue <- case_when(tissue == "esophagus" ~ TRUE,
+                             TRUE ~ FALSE)
+
+#tissue_type = "Esophagus - Mucosa"
+tissue_type <- case_when(tissue == "esophagus" ~ "Esophagus - Mucosa",
+                         tissue == "colon" ~ "Colon - Transverse")
+
+specific_sex <- ifelse(tissue == "breast", TRUE, FALSE)
+cancer_tissue <- ifelse(tissue == "colon", "colorectal", tissue)
+
+unnmatched_tissue <- c("esophagus", "ovary", "stomach", "liver", "pancreas")
+
+run_tcga_n <- case_when(tissue %in% unnmatched_tissue ~ FALSE,
+                        TRUE ~ TRUE)
+
+
+
+## GTEx loading
+## Read in GTEx SAMPID data because they don't have it?
+gtex_pheno <- read.csv("global_in/gtex_phenotypes_v8.csv")
+
+
+
+## Use TCGAquery
+gtex_recount2 <- TCGAquery_recount2("gtex", tissue = tissue)
+
+counts_example_1 <- assays(gtex_recount2[[paste0(studies[1],"_",tissue)]])$counts 
+
+
+
+gtex_n_scaled <- scale_counts(gtex_recount2[[paste0(studies[1],"_",tissue)]])
+
+## Sex filter if needed
+if (specific_sex == TRUE) {
+    gtex_sex = ifelse(sex_type == "MALE", 1, 2)
+    gtex_pheno <- filter(gtex_pheno, SEX == gtex_sex)
+    short_gtex_vect2vect(gtex_recount2$gtex_breast$sampid)
+    sex_ind <- short_gtex_vect2vect(gtex_recount2$gtex_breast$sampid) %in% gtex_pheno$SUBJID
+    gtex_n_scaled <- gtex_n_scaled[,sex_ind]
+}
+
+if (specific_tissue == TRUE) {
+    tiss_ind <- gtex_n_scaled$smtsd %in% tissue_type 
+    gtex_n_scaled <- gtex_n_scaled[,tiss_ind]
+}
+#gtex_scaled$sampid
+
+
+#Scaled Counts is required for this analysis
+
+tcga_recount2 <- TCGAquery_recount2("tcga", tissue = cancer_tissue)
+
+
+
+
+## Normal or not
+sample_type <-  tcga_recount2[[paste0(studies[2],"_",cancer_tissue)]]$gdc_cases.samples.sample_type_id
+tcga_scaled <- scale_counts(tcga_recount2[[paste0(studies[2],"_",cancer_tissue)]])
+
+unique(sample_type)
+cancer_index <- sample_type %in% c("01", "02")
+normal_index <- sample_type %in% c("11")
+
+tcga_c_scaled <- tcga_scaled[,cancer_index]
+cancer_index <- tcga_c_scaled$gdc_cases.project.project_id %in% paste0("TCGA-",cancer_type)
+tcga_c_scaled <- tcga_c_scaled[,cancer_index]
+
+if (specific_cancer == TRUE) {
+    cancer_hist_type <- tcga_c_scaled$cgc_case_histological_diagnosis
+    hist_index <- cancer_hist_type %in% hist_type
+    tcga_c_scaled <- tcga_c_scaled[,hist_index]
+}
+
+if (specific_sex == TRUE) {
+    ind_sex <- tcga_c_scaled$cgc_case_gender %in% sex_type
+    tcga_c_scaled <- tcga_c_scaled[,ind_sex]
+}
+## Normal tissue
+tcga_n_scaled <- tcga_scaled[,normal_index]
+if (specific_sex == TRUE) {
+    ind_sex <- tcga_n_scaled$cgc_case_gender %in% sex_type
+    tcga_n_scaled <- tcga_n_scaled[,ind_sex]
+}
+
+
+## Load matrisome
+##SUBSET OUT MATRISOME
+matrisome <- read.csv("global_in/matrisome_hs_masterlist_EDIT_r.csv", stringsAsFactors = F)
+colnames(matrisome)[1] <- "division"
+
+matrisome_core <- filter(matrisome, division == "Core matrisome" | Category == "ECM Regulators")
+matrisome_assoc <- filter(matrisome, division == "Matrisome-associated")
+
+
+
+
+
+
+
+
+## For loop pipeline starts here
+
+
+
+
+## Get gene filter list
+
+cur_obj <- apply(expand.grid(studies, paste0(n_o_c, "_scaled")),
+                 1, paste, collapse="_")
+
+
+cur_obj <- cur_obj[sapply(cur_obj, exists)]
+
+
+filter_1_pass <- list()
+filter_2_pass <- list()
+gene_drop <- list()
+first_dims <- list()
+second_dims <- list()
+
+for (obj in cur_obj) {
+    
+    if (run_tcga_n == FALSE){
+        if (obj == "tcga_n_scaled") {
+            next
+        }
+    }
+    
+    stamp <- str_sub(obj, end = -8)
+    #deseq_dat <- DESeqDataSet(tcga_n_scaled, ~ 1)
+    #deseq_dat <- DESeqDataSet(gtex_scaled, ~1)
+    deseq_dat <- DESeqDataSet(get(obj), ~ 1)
+    #Remove low genes
+    ind <- rowSums(assay(deseq_dat)) > 5
+    
+    gene_drop[[paste0(stamp, "_filter1")]] <- rowData(deseq_dat)[!ind,]
+    
+    hist(assay(deseq_dat), main = "Pre first filter")
+    
+    
+    deseq_dat <- deseq_dat[ind,]
+    
+    hist(assay(deseq_dat), main = "Post first filter")
+    
+    filter_1_pass[[stamp]] <- rowData(deseq_dat)$gene_id
+    
+    
+    vst_dat <- vst(deseq_dat)
+    
+    assay_dat <- assay(vst_dat)
+    
+    first_dims[[stamp]] <- dim(assay_dat)
+    
+    
+    hist(assay_dat, main = "Pre second filter")
+    abline(v = 5)
+    
+    ind <- (rowMeans(assay_dat) > 5)
+    gene_drop[[paste0(stamp, "_filter2")]] <- rowData((vst_dat))[!ind,]
+    
+    deseq_dat <- deseq_dat[ind,]
+    
+    assay_dat_filt <- assay_dat[ind,]
+    
+    hist((assay_dat_filt), main = "Post second filter")
+    
+    filter_2_pass[[stamp]] <- rownames(assay_dat_filt)
+    
+    second_dims[[stamp]] <- dim(assay_dat_filt)
+    ### Matrisome filter ###--------
+    
+    
+    feature_dat_filt <- rowData(deseq_dat)
+    feature_dat <- rowData(deseq_dat)
+    ind <- (as.vector(feature_dat$symbol) %in% matrisome_core$Gene.Symbol)
+    
+    deseq_dat <- deseq_dat[ind,]
+    mat_dat <- assay_dat_filt[ind,]
+    
+    rownames(mat_dat) <- as.vector(rowData(deseq_dat)[,3])
+    feature_dat <- rowData(deseq_dat)
+    samp_dat <- colData(deseq_dat)
+    
+}
+
+
+gene_pass_1 <- (unique(unname(unlist(filter_1_pass))))
+gene_pass_2 <- (unique(unname(unlist(filter_2_pass))))
+
+
+
+#Get output data
+
+cur_obj <- apply(expand.grid(studies, paste0(n_o_c, "_scaled")),
+                 1, paste, collapse="_")
+
+
+cur_obj <- cur_obj[sapply(cur_obj, exists)]
+
+first_dims <- list()
+second_dims <- list()
+results_profiles <- list()
+results_genes <- list()
+norm_counts <- list()
+gene_lists <- list()
+mat_counts <- list()
+gene_drop <- list()
+
+for (obj in cur_obj) {
+    
+    if (run_tcga_n == FALSE){
+        if (obj == "tcga_n_scaled") {
+            next
+        }
+    }
+    
+    stamp <- str_sub(obj, end = -8)
+    #deseq_dat <- DESeqDataSet(tcga_n_scaled, ~ 1)
+    #deseq_dat <- DESeqDataSet(gtex_scaled, ~1)
+    deseq_dat <- DESeqDataSet(get(obj), ~ 1)
+    
+    ## New first filter from previous chunk
+    
+    ind <- rowData(deseq_dat)$gene_id %in% gene_pass_1
+    
+    gene_drop[[paste0(stamp, "_filter1")]] <- rowData(deseq_dat)[!ind,]
+    
+    hist(assay(deseq_dat), main = "Pre first filter")
+    
+    
+    deseq_dat <- deseq_dat[ind,]
+    
+    hist(assay(deseq_dat), main = "Post first filter")
+    
+    vst_dat <- vst(deseq_dat)
+    
+    assay_dat <- assay(vst_dat)
+    
+    first_dims[[stamp]] <- dim(assay_dat)
+    
+    
+    hist(assay_dat, main = "Pre second filter")
+    abline(v = 5)
+    
+    ## Adding second new filter
+    ind <- rownames(assay_dat) %in% gene_pass_2
+    gene_drop[[paste0(stamp, "_filter2")]] <- rowData((vst_dat))[!ind,]
+    
+    deseq_dat <- deseq_dat[ind,]
+    
+    assay_dat_filt <- assay_dat[ind,]
+    
+    hist((assay_dat_filt), main = "Post second filter")
+    
+    second_dims[[stamp]] <- dim(assay_dat_filt)
+    ### Matrisome filter ###--------
+    
+    
+    feature_dat_filt <- rowData(deseq_dat)
+    feature_dat <- rowData(deseq_dat)
+    ind <- (as.vector(feature_dat$symbol) %in% matrisome_core$Gene.Symbol)
+    
+    deseq_dat <- deseq_dat[ind,]
+    mat_dat <- assay_dat_filt[ind,]
+    
+    rownames(mat_dat) <- as.vector(rowData(deseq_dat)[,3])
+    feature_dat <- rowData(deseq_dat)
+    samp_dat <- colData(deseq_dat)
+    
+    
+    ## Save data
+    if (str_detect(stamp, "gtex")) {
+        colnames(assay_dat_filt) <- samp_dat$sampid
+    }else{
+        colnames(assay_dat_filt) <- samp_dat$gdc_cases.submitter_id
+    }
+    
+    norm_counts[[stamp]] <- assay_dat_filt
+    
+    gene_lists[[stamp]] <- feature_dat_filt
+    
+    
+    
+}
+
+
+## Quantile normalize
+
+master_matrix <- do.call(cbind, norm_counts)
+melt_master <- melt((master_matrix))
+ggplot(melt_master,aes(x=value, color=Var2)) + geom_density(alpha=0.25) +
+    theme(legend.position = "none")
+quant_matrix <- normalize.quantiles(master_matrix)
+
+rownames(quant_matrix) <- rownames(master_matrix)
+colnames(quant_matrix) <- colnames(master_matrix)
+
+melt_quant <- melt((quant_matrix))
+ggplot(melt_quant,aes(x=value, color=Var2)) + geom_density(alpha=0.25) +
+    theme(legend.position = "none")
+
+
+
+## Take out matrisome
+ind <- as.vector(gene_lists$gtex_n$symbol) %in% matrisome_core$Gene.Symbol
+master_matrisome <- quant_matrix[ind,]
+matrisome_gene_list <- gene_lists$gtex_n[ind,]
+
+rownames(master_matrisome) <- as.vector(matrisome_gene_list$symbol)
+
+### Split data back into respective lists
+mat_counts <- list()
+
+name = names(norm_counts)[2]
+
+for (name in names(norm_counts)) {
+    ## Have a counter for columns
+    if (name == names(norm_counts[1])) {
+        first_ind = 1
+        last_ind = ncol(norm_counts[[name]])
+    }else{
+        last_ind = ncol(norm_counts[[name]]) + first_ind -1
+    }
+    #last_ind = ncol(norm_counts[[name]])
+    mat_counts[[name]]<- master_matrisome[,first_ind:last_ind]
+    first_ind = last_ind + 1
+    
+    
+}
+
+
+
+# origi_mat_counts <- mat_counts
+# 
+# if (quantile_analysis == TRUE) {
+#   mat_counts <- quant_mat
+# }
+# 
+# lapply(mat_counts, dim)
+shared_counts <- mat_counts
+
+## Making of normal counts
+if (run_tcga_n == TRUE){
+    normal_counts <- rowMeans(do.call(cbind, lapply(mat_counts[-3], rowMeans)))
+    
+}else{normal_counts <- rowMeans(mat_counts$gtex_n)}
+
+
+
+
+cancer_counts <- rowMeans(shared_counts$tcga_c)
+
+ordered_normal <- names(normal_counts[order(normal_counts, decreasing = T)])
+
+ordered_cancer <- names(cancer_counts[order(cancer_counts, decreasing = T)])
+
+ordered_genes <- data.frame(cbind(ordered_normal, ordered_cancer))
+
+final_order_genes <- mutate(ordered_genes, rank_change = match(ordered_cancer, ordered_normal) - seq(nrow(ordered_genes)))
+
+write.csv(final_order_genes, file = paste0("GTEx_TCGA_comparison/output/",tissue_stamp, "_normal_cancer_rank_change.csv"))
+hist(final_order_genes$rank_change)
+
+
+
+## Normal vs Normal
+
+if (run_tcga_n == TRUE){
+    
+    gtex_counts <- rowMeans(shared_counts$gtex_n)
+    tcga_n_counts <- rowMeans(shared_counts$tcga_n)
+    
+    
+    ordered_gtex <- names(gtex_counts[order(gtex_counts, decreasing = T)])
+    
+    ordered_tcn <- names(tcga_n_counts[order(tcga_n_counts, decreasing = T)])
+    
+    ordered_genes_n <- data.frame(cbind(ordered_gtex, ordered_tcn))
+    
+    final_order_genes_norm <- mutate(ordered_genes_n, rank_change = match(ordered_tcn, ordered_gtex) - seq(nrow(ordered_genes_n)))
+    
+    write.csv(final_order_genes_norm, file = paste0("GTEx_TCGA_comparison/output/",tissue_stamp,"_normal_only_rank_change.csv"))
+    hist(final_order_genes_norm$rank_change)
+    
+} else{
+    gtex_counts <- rowMeans(shared_counts$gtex_n)  
+    ordered_gtex <- names(gtex_counts[order(gtex_counts, decreasing = T)])
+    
+}
+
+## GTEx vs Cancer
+ordered_gtex_tcga <- data.frame(cbind(ordered_gtex, ordered_cancer))
+
+final_order_gtex_tcga <- mutate(ordered_gtex_tcga, rank_change = match(ordered_cancer, ordered_gtex) - seq(nrow(ordered_gtex_tcga)))
+
+write.csv(final_order_gtex_tcga, file = paste0("GTEx_TCGA_comparison/output/",tissue_stamp,"_gtex_tcga_rank_change.csv"))
+hist(final_order_gtex_tcga$rank_change)
+
+## TCGA-N vs TCGA-C
+if (run_tcga_n == TRUE){
+    ordered_tcga_n_c <- data.frame(cbind(ordered_tcn, ordered_cancer))
+    
+    final_order_tcga_n_c <- mutate(ordered_tcga_n_c, rank_change = match(ordered_cancer, ordered_tcn) - seq(nrow(ordered_tcga_n_c)))
+    
+    write.csv(final_order_tcga_n_c, file = paste0("GTEx_TCGA_comparison/output/",tissue_stamp,"_tcga_n_c_rank_change.csv"))
+    hist(final_order_tcga_n_c$rank_change)
+}
+
+
+if (run_tcga_n == TRUE){
+    cor(cbind(gtex_counts, tcga_n_counts, cancer_counts),method = "kendall")
+} else {
+    cor.test(gtex_counts, cancer_counts ,method = "kendall")
+}
+
+"MMP1" %in% as.vector(gene_drop$gtex_n_filter1$symbol)
+
+gen_lst <- gene_drop
+dropped_gene <- "MMP1"
+gene_drop_finder <- function(dropped_gene, gen_lst){
+    temp_list <- lapply(gen_lst, function(x){as.vector(x[["symbol"]])})
+    unlist(lapply(temp_list, function(x){ dropped_gene %in% x}))
+}
+
+drop_vect <- gene_drop_finder("MMP1", gene_drop)
+
+names(dropped_gene) <- "dropped_gene"
+
+dropped_df <- as.data.frame(c(dropped_gene, drop_vect)) %>% set_names(c(tissue))
+
+#rbind(existingDF[1:r,],newrow,existingDF[-(1:r),])
+
+if (run_tcga_n == FALSE) {
+    temp_df <- berryFunctions::insertRows(dropped_df, c(4,5), data.frame(c(NA,NA)))
+    rownames(temp_df)[4:7] <- c(gsub("_c_", "_n_", rownames(temp_df)[4:5]), rownames(temp_df)[4:5])
+    dropped_df <- temp_df
+}
+
+
+
+if (file.exists("GTEx_TCGA_comparison/output/gene_drop_test.csv")) {
+    all_dropped <- read.csv("GTEx_TCGA_comparison/output/gene_drop_test.csv",row.names = 1)
+    if (!(tissue %in% colnames(all_dropped))) {
+        all_dropped_out <- cbind(all_dropped, dropped_df)
+        write.csv(all_dropped_out, "GTEx_TCGA_comparison/output/gene_drop_test.csv")
+    }
+}else{
+    write.csv(dropped_df, "GTEx_TCGA_comparison/output/gene_drop_test.csv")
+}
+
+
+
+
+## Count genes coming out of this 
+
+genes_passed_filter_1 <- length(gene_pass_1)
+genes_passed_filter_2 <- length(gene_pass_2)
+tcga_c_samples_n <- ncol(tcga_c_scaled)
+tcga_n_samples_n <- ncol(tcga_n_scaled)
+gtex_samples_n <- ncol(gtex_n_scaled)
+
+if (run_tcga_n == FALSE) {
+    tcga_n_samples_n <- NA
+}
+
+temp_df <- cbind(genes_passed_filter_1, genes_passed_filter_2, tcga_c_samples_n, tcga_n_samples_n, gtex_samples_n)
+
+rownames(temp_df) <- tissue
+
+if (file.exists("GTEx_TCGA_comparison/output/cancer_counter.csv")) {
+    cancer_counter <- read.csv("GTEx_TCGA_comparison/output/cancer_counter.csv",row.names = 1)
+    if (!(tissue %in% rownames(cancer_counter))) {
+        all_counted <- rbind(cancer_counter, temp_df)
+        write.csv(all_counted, "GTEx_TCGA_comparison/output/cancer_counter.csv")
+    }
+}else{
+    write.csv(temp_df, "GTEx_TCGA_comparison/output/cancer_counter.csv")
+}
+
+
+}

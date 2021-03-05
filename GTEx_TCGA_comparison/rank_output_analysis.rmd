@@ -1,0 +1,482 @@
+---
+title: "rank_output_analysis"
+author: "Tim Nieuwenhuis"
+date: "11/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(GGally)
+library(RColorBrewer)
+quantile_analysis = TRUE
+```
+
+Functions
+```{r}
+quantile_position <- function(x, quants = 4, na_rm = TRUE){
+    ## This function intakes a vector of numbers and returns
+    ## a vector of numbers, each number referring to which 
+    ## quantile the number is a part of.
+    ## "quants" is the number of quantiles you want
+    ## "na_rm" keep or ignore the NAs
+    
+    ## Generate the stepwise quantile vector required for quantile()
+    quant_number <- 1/quants
+    percentile <- seq(0, 1, by =quant_number)
+    ## use quantile to get the different numbers defining the quantiles
+    quants_out <- quantile(x, percentile, na.rm = na_rm)
+    out_dat <- x
+    ## For loop used to assign each number to a given quant
+    for (i in seq(quants)) {
+        out_dat[x >= quants_out[i]] <- i
+    }
+    out_dat
+}
+```
+
+
+Loading and preparing matrisome data
+```{r}
+matrisome <- read.csv("../global_in//matrisome_hs_masterlist_EDIT_r.csv", fileEncoding = "UTF-8-BOM") %>%
+            select(Division, Category, Gene.Symbol)
+```
+
+
+```{r}
+
+## List of training tissues
+tissue_list <- c("lung", "breast", "colon", "thyroid", "prostate")
+## Select which comparison to do 
+## Note: all_tcga is "general_normal" vs TCGA-C
+
+#comparison <- c("all_tcga", "gtex_tcga", "tcga_tcga")
+comparison <- c("all_tcga")
+
+tissue = tissue_list[1]
+
+## Old loop which removes non shared genes
+
+# for (tissue in tissue_list) {
+#     if (comparison == "all_tcga"){
+#         filename = paste0(tissue,"_normal_cancer_rank_change.csv")
+#     } else if (comparison == "gtex_tcga"){
+#         filename = paste0(tissue,"_gtex_tcga_rank_change.csv")
+#     } else if (comparison == "tcga_tcga"){
+#         filename = paste0(tissue,"_tcga_n_c_rank_change.csv")
+#     }
+#     
+#     
+# temp_dat <- read.csv(paste0("output/",filename))[,-1:-2] %>%
+#     mutate(cancer_rank = 1:n()) %>% set_names(c("genes",
+#                                                 paste0("rank_change_",tissue),
+#                                                 paste0("cancer_rank_",tissue))) %>%
+#     filter(genes != "SERPINA3")
+#     if (tissue == tissue_list[1]) {
+#      final_genes <- temp_dat$genes
+#      final_dat <- temp_dat
+#     }
+# temp_genes <- temp_dat$genes
+# final_genes <- intersect(final_genes, temp_genes)
+# if (tissue != tissue_list[1]) {
+#     final_dat <- left_join(final_dat, temp_dat) %>%
+#         filter(genes %in% final_genes)
+# }
+# 
+# }
+
+## New loop which keeps NA Genes
+
+for (tissue in tissue_list) {
+    if (quantile_analysis == TRUE) {
+        tissue = paste0(tissue, "_quant")
+    }
+    ## Select which file we're intersted in for each tisues
+    if (comparison == "all_tcga"){
+        filename = paste0(tissue,"_normal_cancer_rank_change.csv")
+    } else if (comparison == "gtex_tcga"){
+        filename = paste0(tissue,"_gtex_tcga_rank_change.csv")
+    } else if (comparison == "tcga_tcga"){
+        filename = paste0(tissue,"_tcga_n_c_rank_change.csv")
+    }
+    
+    ## Read in data and give cancer rank and rank change from cancer.
+temp_dat <- read.csv(paste0("output/",filename))[,-1:-2] %>%
+    ## Make the rank order
+    mutate(cancer_rank = 1:n()) %>%
+    ## Rename genes
+    
+    ## Error here: Okay so I added cancer_rank to the code below but now I'm thrown
+    ## new erros, figure out after lunch
+    set_names(c("genes",
+                paste0("rank_change_",tissue),
+                paste0("cancer_rank_", tissue))) %>%
+    ## Filter out gene that has been acting weird
+   filter(genes != "SERPINA3")
+    ## Save the data if this is the first loop
+    if (tissue == tissue_list[1] | tissue == paste0(tissue_list[1], "_quant")) {
+    # final_genes <- temp_dat$genes
+     final_dat <- temp_dat
+    }
+## If not first loop bind the data together
+if (tissue != tissue_list[1]) {
+    final_dat <- full_join(final_dat, temp_dat)
+}
+
+}
+
+
+## Find out why there are duplicate genes!!!
+## I did, there are just 2 SERPINA3 for some reason
+
+rank_change_dat <- final_dat %>% select(genes, starts_with("rank"))
+rank_change_mat <- column_to_rownames(rank_change_dat, "genes")
+#cor(rank_change_mat, method = "kendall")
+## Cor above no longer works due to NA inclusion
+
+
+cancer_rank_dat <- final_dat %>% select(genes, starts_with("cancer"))
+
+```
+Rank change dat analysis
+```{r}
+## Seer correlations between rank changes
+ggpairs(rank_change_mat)
+
+## Old function, see in second chunck
+# quants = 4
+# x = rank_change_mat$rank_change_lung
+# quantile_position <- function(x, quants = 4, na_rm = TRUE){
+#     quant_number <- 1/quants
+#     percentile <- seq(0, 1, by =quant_number)
+#     quants_out <- quantile(x, percentile, na.rm = na_rm)
+#     out_dat <- x
+#     for (i in seq(quants)) {
+#         out_dat[x >= quants_out[i]] <- i
+#     }
+#     out_dat
+# }
+
+## Generate a matrix of quantile ranks
+quantile_rank <- rank_change_mat %>% mutate_all(list(~ quantile_position(., quants = 10)))
+rownames(quantile_rank) <- rownames(rank_change_mat)
+quantile_rank
+
+## Write out the output
+write.csv(quantile_rank, paste0("output/",comparison,"_quantile_rank.csv"))
+
+hist(rowSums(rank_change_mat, na.rm = T))
+
+
+## Get the sum rank across training datasets to 
+sum_rank_out <- as.data.frame(rowSums(rank_change_mat, na.rm = T)) %>%
+    rownames_to_column(var = "genes") %>%
+    set_names(c("genes", "sum_ranks")) %>%
+    arrange(desc(sum_ranks))
+
+joined_out <- left_join(rownames_to_column(rank_change_mat, "genes"), sum_rank_out)
+
+
+## Save the comparisons
+write.csv(joined_out, paste0("output/",comparison,"_current_sum_ranks.csv"), row.names = F)
+
+## Histogram for all rank sums
+
+ordered_join_out <- arrange(joined_out, desc(sum_ranks)) %>%
+  filter(!is.na(sum_ranks))
+
+plot_join_out <- ordered_join_out %>%
+  filter(!is.na(sum_ranks)) %>%
+  mutate(top_bot = case_when(
+  genes %in% head(ordered_join_out$genes, 10) ~ "top",
+   genes %in% tail(ordered_join_out$genes, 10) ~ "bot",
+   TRUE ~ ""
+    ),
+  quantile_pos = quantile_position(sum_ranks, quants = 10),
+  top_o_bot = ifelse(top_bot %in% c("top", "bot"), "Yes", "No"))
+
+ggplot(plot_join_out, aes(sum_ranks, fill = as.factor(quantile_pos))) +
+  geom_histogram(aes(color = top_o_bot), bins = 40) + 
+ scale_fill_manual(values = colorRampPalette(rev(brewer.pal(n = 7, name =
+                                    "RdYlBu")))(10)) + 
+  scale_color_manual(values = c("grey40", "black")) +
+    xlab("Sum of Rank Changes Across Tissues") +
+    ylab("Count of Genes") +
+    labs(fill = "Decile") +
+  theme_classic()
+ggsave("output/histogram_sum_ranks_decile_outline.pdf", height = 7, width = 9)
+
+
+### Just lung
+ordered_lung <- arrange(joined_out, desc(rank_change_lung_quant)) %>%
+  filter(!is.na(rank_change_lung_quant))
+
+plot_lung <- ordered_lung %>%
+  filter(!is.na(rank_change_lung_quant)) %>%
+  mutate(top_bot = case_when(
+  genes %in% head(ordered_join_out$genes, 10) ~ "top",
+   genes %in% tail(ordered_join_out$genes, 10) ~ "bot",
+   TRUE ~ ""
+    ),
+  quantile_pos = quantile_position(rank_change_lung_quant, quants = 10),
+  top_o_bot = ifelse(top_bot %in% c("top", "bot"), "Yes", "No"))
+
+ggplot(plot_lung, aes(rank_change_lung_quant, fill = as.factor(quantile_pos))) +
+  geom_histogram(aes(color = top_o_bot),bins = 40) + 
+ scale_fill_manual(values = colorRampPalette(rev(brewer.pal(n = 7, name =
+                                    "RdYlBu")))(10)) +
+  scale_color_manual(values = c("grey40", "black")) +
+    xlab("Lung Normal to Cancer Rank Change") +
+    ylab("Count of Genes") +
+    labs(fill = "Decile") +
+  theme_classic() 
+
+ggsave("output/histogram_lung_decile.pdf", height = 7, width = 9)
+```
+
+## Loading in test tissues
+
+This code chunk is the same as above, but just reads in the tissues for testing
+```{r}
+tissue_test <- c("esophagus", "ovary", "stomach", "pancreas", "liver")
+#comparison <- c("all_tcga", "gtex_tcga", "tcga_tcga")
+comparison <- c("all_tcga")
+
+tissue = tissue_test[1]
+for (tissue in tissue_test) {
+    if (quantile_analysis == TRUE) {
+        tissue = paste0(tissue, "_quant")
+    }
+    ## Set up file names
+    filename = paste0(tissue,"_gtex_tcga_rank_change.csv")
+    
+temp_dat <- read.csv(paste0("output/",filename))[,-1:-2] %>%
+    mutate(cancer_rank = 1:n()) %>% set_names(c("genes",
+                                                paste0("rank_change_",tissue),
+                                                paste0("cancer_rank_",tissue))) %>%
+    filter(genes != "SERPINA3")
+    if (tissue == tissue_test[1] | tissue == paste0(tissue_test[1], "_quant")) {
+     final_test <- temp_dat
+    }
+
+
+if (tissue != tissue_test[1]) {
+    final_test <- full_join(final_test, temp_dat) 
+}
+
+}
+
+rank_test_dat  <-   final_test %>%
+        column_to_rownames(var = "genes") %>%
+        select(starts_with("rank")) %>% 
+        mutate_all(list(~ quantile_position(., quants = 10)))
+rownames(rank_test_dat) <- final_test$genes  
+```
+
+
+
+Heatmap idea
+```{r}
+## Load in Pheatmap
+library(pheatmap)
+## Load in the data
+tcga_n_quantranks <- read.csv("output/tcga_tcga_quantile_rank.csv")
+gtex_quantranks <- read.csv("output/gtex_tcga_quantile_rank.csv")
+all_tcga_ranks <- read.csv("output/all_tcga_current_sum_ranks.csv")
+
+## Select top and bottom genes of the list
+top_genes <- head((arrange(all_tcga_ranks, desc(sum_ranks)) %>% select(genes))[,1], 10)
+bot_genes <- head((arrange(all_tcga_ranks, (sum_ranks)) %>% select(genes))[,1], 10)
+## Combine them into a vector
+t_b_genes <- c(top_genes, bot_genes)
+## Filter down to genes of interest
+gtex_heatmap_ranks <- gtex_quantranks %>% filter(X %in% top_genes | X %in% bot_genes) %>%
+                column_to_rownames("X")
+## Order based on genes so it goes from lowest to highest
+gtex_heatmap_ranks_ord <- gtex_heatmap_ranks[c(top_genes, rev(bot_genes)),]
+## Clean up titles
+colnames(gtex_heatmap_ranks_ord) <- gsub(pattern = "rank_change_",
+                   replacement = "",
+                   x = colnames(gtex_heatmap_ranks_ord))
+## Initial GTEx heatmap
+pheatmap(gtex_heatmap_ranks_ord, cluster_rows = F, annoation_row = t_b_genes,
+         na_col = "black")
+
+
+
+
+## TCGA-N
+
+tcga_n_heatmap_ranks <- tcga_n_quantranks %>% filter(X %in% top_genes | X %in% bot_genes) %>%
+                column_to_rownames("X")
+
+tcga_n_heatmap_ranks_ord <- tcga_n_heatmap_ranks[c(top_genes, rev(bot_genes)),]
+
+colnames(tcga_n_heatmap_ranks_ord) <- gsub(pattern = "rank_change_",
+                   replacement = "",
+                   x = colnames(tcga_n_heatmap_ranks_ord))
+
+pheatmap(tcga_n_heatmap_ranks_ord, cluster_cols = F, cluster_rows = F, annoation_row = c(top_genes, bot_genes),
+         na_col = "black")
+```
+Seperatly cluster the test dataset
+```{r}
+
+## Filter NA
+#all_tcga_test <- filter(all_tcga_ranks, genes %in% intersect(gtex_quantranks$X, rank_test_dat$X))
+
+#top_genes <- head((arrange(all_tcga_test, desc(sum_ranks)) %>% select(genes))[,1], 100)
+#bot_genes <- head((arrange(all_tcga_test, (sum_ranks)) %>% select(genes))[,1], 100)
+
+## Keep NA
+#top_genes <- head((arrange(all_tcga_ranks, desc(sum_ranks)) %>% select(genes))[,1], 12)
+#bot_genes <- head((arrange(all_tcga_ranks, (sum_ranks)) %>% select(genes))[,1], 10)
+
+gtex_heatmap_ranks <- gtex_quantranks %>% filter(X %in% top_genes | X %in% bot_genes)
+rank_test_heat_dat <- rownames_to_column(rank_test_dat, "X")
+
+train_test_rank <- left_join(gtex_heatmap_ranks, rank_test_heat_dat) %>%
+    column_to_rownames("X")
+
+train_test_ranks_ord <- train_test_rank[c(top_genes, rev(bot_genes)),]
+
+## Prepare pheatmap data
+colnames(train_test_ranks_ord) <- gsub(pattern = "rank_change_",
+                   replacement = "",
+                   x = colnames(train_test_ranks_ord))
+
+## Add matrisome gene data
+
+anno_row <- left_join(data.frame(c(top_genes, rev(bot_genes))) %>%
+             dplyr::rename(Gene.Symbol = `c.top_genes..rev.bot_genes..`),
+             matrisome) %>%
+             select(-Division) %>%
+             column_to_rownames(var ="Gene.Symbol")
+
+
+
+anno_col <- data.frame(c(rep("matched", length(tissue_list)),
+                         rep("unmatched", length(tissue_test))),
+                       row.names = colnames(train_test_ranks_ord))
+
+
+anno_colors <- list()
+
+anno_colors$Category <- c("ECM Glycoproteins" = "#5D3A9B",
+                      "Collagens" = "#E66100",
+                      "Proteoglycans" = "#994F00",
+                      "ECM Regulators" = "#E1BE6A")
+
+anno_colors[""]
+
+colnames(anno_col) <- c("dataset")
+
+pheatmap(train_test_ranks_ord,
+         cluster_rows = F,
+         cluster_cols = F,
+         annoation_row = c(top_genes, bot_genes),
+         annotation_col =  anno_col,
+         annotation_row = anno_row,
+         annotation_colors = anno_colors,
+         na_col = "black")
+
+
+```
+
+Comvine plots
+
+```{r}
+train_2bind <-  train_test_ranks_ord
+
+tcga_n_bind <- tcga_n_heatmap_ranks_ord
+colnames(tcga_n_bind) <- paste0(colnames(tcga_n_heatmap_ranks_ord), "-tcga")
+
+
+add_col_1 <- data.frame(rep("matched", ncol(tcga_n_bind)),
+                        row.names = colnames(tcga_n_bind)) %>%
+    set_names(c("dataset"))
+
+anno_col_2 <- cbind(rbind(add_col_1, anno_col),
+                    c(rep("TCGA", ncol(tcga_n_bind)),
+                      rep("GTEx", ncol(train_test_ranks_ord)))) %>%
+    set_names(c("Data Set", "Data Source"))
+
+## Without clustering
+
+pheatmap(cbind(tcga_n_bind, train_test_ranks_ord),
+         cluster_rows = F,
+         cluster_cols = F,
+         annoation_row = c(top_genes, bot_genes),
+         annotation_col =  anno_col_2,
+         annotation_row = anno_row,
+         annotation_colors = anno_colors,
+         na_col = "black",
+         filename = "output/match_unmatched_compare.pdf",
+         width = 10, 
+         height = 6)
+
+
+## With clustering
+
+pheatmap(cbind(tcga_n_bind, train_test_ranks_ord),
+         cluster_rows = F,
+         cluster_cols = F,
+         annoation_row = c(top_genes, bot_genes),
+         annotation_col =  anno_col_2,
+         annotation_row = anno_row,
+         annotation_colors = anno_colors,
+         na_col = "black")
+```
+
+How well do testranks perform
+```{r}
+test_tiss <- c("esophagus", "ovary", "stomach", "pancreas", "liver")
+test_tiss <- paste0(test_tiss, "_quant")
+
+train_dat <- cbind(tcga_n_bind, train_test_ranks_ord) %>%
+  rownames_to_column(var = "gene") %>%
+  mutate(top_o_bot = ifelse(row_number() <= 10, "Top", "Bottom"),
+         top_o_bot = factor(top_o_bot, levels = c("Top", "Bottom")))
+train_melt  <-  melt(train_dat) %>% mutate(variable = as.character(variable),
+                               source = case_when(
+                                 str_detect(variable, "tcga") ~ "TCGA",
+                                variable %in% test_tiss ~ "unmatched-GTEx",
+                                 TRUE ~ "matched-GTEx"
+                               ),
+                               value = ifelse(is.na(value), ("NA"), value),
+                               value = factor(value,
+                                              levels = c("NA",as.character(seq(1, 10)))
+                                              ),
+                               source = factor(source,
+                                               levels =c("TCGA", "matched-GTEx", "unmatched-GTEx")))
+
+ggplot(train_melt, aes(value, fill = top_o_bot)) +
+  geom_histogram(stat = "count") +
+  facet_grid(~source)  +
+  ylab("Count of Genes") +
+  xlab("Decile") +
+  scale_fill_manual(values = (colorRampPalette(rev(brewer.pal(n = 7, name =
+                                    "RdYlBu")))(10)[c(10,1)])) +
+  theme_classic() +
+  theme(legend.position = "bottom") +
+  labs(fill = "Top or Bottom Genes")
+  
+ggsave("output/top_bot_gene_decile_hist.pdf", width = 10, height = 7)
+
+test_melt <- train_melt %>% filter(source == "test-GTEx")
+
+table(test_melt$value, test_melt$top_o_bot)
+table(train_melt$source, train_melt$value)
+
+rowSums(table(train_melt$source, train_melt$value)[,-c(2, 11)])
+```
+
+```{r}
+rank_test_tibble <- rank_test_dat %>% rownames_to_column(var = "genes")
+test_matrisome_genes <- left_join(joined_out, rank_test_tibble)
+
+apply(test_matrisome_genes[,-1], 2, FUN = function(x){sum(!is.na(x))})
+
+```
+
