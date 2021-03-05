@@ -1,6 +1,6 @@
 #Generate a variance stabilized transformed dataframe
 
-source("~/work2/tnieuwe1/data/gtex_v7/tim_scripts.R")
+source("~/work2/tnieuwe1/data/gtex_v8/tim_scripts.R")
 library(DESeq2)
 library(tidyverse)
 
