@@ -1,0 +1,1493 @@
+---
+title: "Matrisome Protein Gene Correlation"
+author: "Tim Nieuwenhuis"
+date: "1/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(SummarizedExperiment)
+library(tidyverse)
+library(car)
+```
+
+
+Load in the required data
+```{r}
+## Sources
+## Protein Log2 https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6379049/bin/MSB-15-e8503-s003.zip
+## From the above link we pulled the protein log2 iBAQ data
+## Gene tpm https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6379049/bin/MSB-15-e8503-s004.zip
+## Fromt he above link we pulle dthe transcript tpm data
+
+load("data_in/E-MTAB-2836-atlasExperimentSummary.Rdata")
+#Above file acquired at https://www.ebi.ac.uk/gxa/experiments/E-MTAB-2836/Downloads
+
+transcript_dat <- read.csv(file = "data_in/transcript_dat.csv", stringsAsFactors = F)
+protein_dat <- read.csv(file = "data_in/protein_dat.csv", stringsAsFactors = F)
+matrisome_dat <- read.csv(file = "../global_in//matrisome_hs_masterlist_EDIT_r.csv", stringsAsFactors = F)
+```
+
+## R Markdown
+
+Brief new filter to include regulators
+```{r}
+
+colnames(matrisome_dat)[1] <- "Division"
+
+mat_core_reg <- matrisome_dat %>%
+  filter(Division == "Core matrisome" | Category == "ECM Regulators")
+```
+
+Make a table of gene information and filter table
+```{r }
+#transcript_dat
+## Make gene table
+gene_tab <- select(transcript_dat, c(Gene.ID, Gene.name))
+## Summ up all transcripts into a single gene.id
+gene_dat <- transcript_dat %>% select(-Transcript.ID, -Gene.name) %>% group_by(Gene.ID) %>% summarise_all(funs(sum))
+## Make new gene dat, replaces transcript dat
+gene_dat <- left_join(gene_tab, gene_dat) %>% distinct()
+
+
+```
+
+## Perfor the same type of filtration on protein data.
+```{r}
+#protein_dat
+
+protein_tab <- select(protein_dat, c(Gene.ID, Gene.name))
+
+clean_protein <- protein_dat %>% select(-Protein.ID, -Gene.name) %>% group_by(Gene.ID) %>% summarise_all(funs(sum))
+
+clean_protein <- left_join(protein_tab, clean_protein) %>% distinct()
+
+#clean_protein
+
+```
+
+Use biomart to import data on human protein coding genes and find how many are in our data.
+```{r}
+library(biomaRt)
+#setwd("protein_dat.csv")
+shouldImport=TRUE
+saveFile="proteinCodingHumanGenes.Rda"
+if (!shouldImport || !file.exists(saveFile)){
+  print("Querying Biomart for protein coding genes")
+  ensembl=useMart("ensembl")
+  ensemblHuman = useDataset("hsapiens_gene_ensembl",mart=ensembl)
+  humanProteinCodingGenes = getBM(attributes=c("ensembl_gene_id","external_gene_name","description"), filters='biotype', values=c('protein_coding'), mart=ensemblHuman)
+  save(humanProteinCodingGenes,file=saveFile)
+} else {
+  print("Loading genes from savefile")
+  load(saveFile)
+}
+
+detach("package:biomaRt", unload=TRUE)
+
+sum(gene_dat$Gene.ID %in% humanProteinCodingGenes$ensembl_gene_id )
+
+sum(clean_protein$Gene.ID %in% humanProteinCodingGenes$ensembl_gene_id )
+
+sum(clean_protein$Gene.ID %in% gene_dat$Gene.ID)
+
+sum(clean_protein$Gene.ID %in% gene_dat$Gene.ID)
+
+```
+
+## Start incuding matrisome data
+```{r}
+colnames(matrisome_dat)[1] <- "Division"
+
+## Removed retired genes and see how much overlap there is
+matrisome_dat <- matrisome_dat %>% filter(Division != "Retired")
+
+sum(clean_protein$Gene.name %in% matrisome_dat$Gene.Symbol)
+
+sum(gene_dat$Gene.name %in% matrisome_dat$Gene.Symbol)
+
+## Filtering protein and gene data down to the matrisome
+protein_mat_dat <- clean_protein[clean_protein$Gene.name %in% matrisome_dat$Gene.Symbol,]
+gene_mat_dat <- gene_dat[gene_dat$Gene.ID %in% protein_mat_dat$Gene.ID,]
+protein_mat_dat <- protein_mat_dat[protein_mat_dat$Gene.ID %in% gene_mat_dat$Gene.ID,]
+
+## Arrange data so that each row is equal in the columns
+arrange_protein_mat <- arrange(protein_mat_dat, Gene.name) 
+arrange_gene_mat <- arrange(gene_mat_dat, Gene.name)
+
+#Perform a kendalls tau on all data, non log scaled
+cor(arrange_protein_mat[,3], arrange_gene_mat[,3],method = "kendall")
+
+
+## For loop using a pearson correlation
+cor_list <- NULL
+for (tissue in 3:ncol(arrange_protein_mat)) {
+  
+  hold_cor <- cor((log10(arrange_protein_mat[,tissue]+ 1)),
+                  (log10(arrange_gene_mat[,tissue] + 1)),
+                  method = "pearson")
+  
+  cor_list <- c(cor_list, hold_cor)
+}
+
+names(cor_list) <- colnames(arrange_protein_mat)[3:ncol(arrange_protein_mat)]
+
+cor_list
+## Proof we need to log this
+plot(arrange_protein_mat$Thyroid, arrange_gene_mat$Thyroid)
+
+```
+
+
+```{r}
+
+#### Redoing the above analysis with the core matrisome
+
+## Note: 12/23/2020 I added ECM regulators into the core_mat object
+core_mat <- matrisome_dat %>% filter(Division == "Core matrisome" | Category == "ECM Regulators")
+
+protein_core_dat <- clean_protein[clean_protein$Gene.name %in% core_mat$Gene.Symbol,]
+gene_core_dat <- gene_dat[gene_dat$Gene.ID %in% protein_core_dat$Gene.ID,]
+protein_core_dat <- protein_core_dat[protein_core_dat$Gene.ID %in% gene_core_dat$Gene.ID,]
+
+arrange_protein_mat <- arrange(protein_mat_dat, Gene.name) 
+arrange_gene_mat <- arrange(gene_mat_dat, Gene.name)
+
+cor(arrange_protein_mat[,3], arrange_gene_mat[,3],method = "kendall")
+
+
+cor_list <- NULL
+i <- 1
+plot_list <- list()
+for (tissue in 3:ncol(arrange_protein_mat)) {
+  hold_cor <- cor(log10(arrange_protein_mat[,tissue] + 1), log10(arrange_gene_mat[,tissue] + 1), method = "pearson")
+  plot_list[i] <- scatterplot(log10(arrange_protein_mat[,tissue] + 1),
+                              log10(arrange_gene_mat[,tissue] + 1),
+                              xlab = paste0("log10 + 1 proteins for ",colnames(arrange_protein_mat)[tissue]),
+                              ylab = paste0("log10 + 1 genes for ",colnames(arrange_protein_mat)[tissue]))
+  i <- i + 1
+  cor_list <- c(cor_list, hold_cor)
+
+  }
+
+names(cor_list) <- colnames(arrange_protein_mat)[3:ncol(arrange_protein_mat)]
+
+cor_list
+
+
+arrange_protein_mat
+
+arrange_gene_mat
+
+plot(log2(arrange_protein_mat[,19]), log2(arrange_gene_mat[,19]))
+
+cor(log10(arrange_protein_mat[,3] + 1), log10(arrange_gene_mat[,3] + 1), method = "spearman")
+
+plot((arrange_protein_mat[,3]),(arrange_gene_mat[,3]))
+```
+
+
+General
+```{r}
+
+#All genes
+
+
+gene_spear_dat <- gene_dat[gene_dat$Gene.ID %in% clean_protein$Gene.ID,]
+protein_spear_dat <- clean_protein[clean_protein$Gene.ID %in% gene_spear_dat$Gene.ID,]
+
+arrange_protein_spear <- arrange(protein_spear_dat, Gene.name) 
+arrange_gene_spear <- arrange(gene_spear_dat, Gene.name)
+
+cor(log10(arrange_protein_spear[,3] +1 ),
+    log10(arrange_gene_spear[,3] + 1),
+    method = "kendall")
+
+
+cor_list <- NULL
+i <- 1
+plot_list <- list()
+for (tissue in 3:ncol(arrange_protein_spear)) {
+  
+  hold_cor <- cor((log10(arrange_protein_spear[,tissue]+ 1)),
+                  (log10(arrange_gene_spear[,tissue] + 1)),
+                  method = "kendall")
+  
+   plot_list[i] <- scatterplot(log10(arrange_protein_mat[,tissue] + 1),
+                              log10(arrange_gene_mat[,tissue] + 1),
+                              xlab = paste0("log10 + 1 proteins for ",colnames(arrange_protein_mat)[tissue]),
+                              ylab = paste0("log10 + 1 genes for ",colnames(arrange_protein_mat)[tissue]))
+  i <- i + 1
+  
+  
+  
+  cor_list <- c(cor_list, hold_cor)
+}
+
+names(cor_list) <- colnames(arrange_protein_mat)[3:ncol(arrange_protein_mat)]
+
+cor_list
+
+
+
+```
+
+New correct data
+
+Note from 12/23/2020: What does correct data mean?
+
+Protein ibaq is the way they measured the data and I understand Gene fpkm, so all the data above is no longer used?
+The gene doesn't require me to collapse transcript data which is nice, I'm interested int he difference between the gene previous protein data and the ibaq, but I remember switching to ibaq
+```{r}
+
+# Read in normalized FPKM and ibaq data
+gene_fpkm <- read.csv("data_in/gene_fpkm.csv", stringsAsFactors = F)
+protein_ibaq <- read.csv("data_in/protein_ibaq.csv", stringsAsFactors = F)
+
+# Pull only genes found in the protein data and vice versa
+gene_spear_dat <- gene_fpkm[gene_fpkm$Gene.ID %in% protein_ibaq$Gene.ID, ]
+protein_spear_dat <- protein_ibaq[protein_ibaq$Gene.ID %in% gene_spear_dat$Gene.ID, ]
+
+# Arrange data and remove unused columns
+arrange_protein_spear <- arrange(protein_spear_dat, Gene.name) %>% dplyr::select(-c("Tissue.enriched", "Group.enriched", "Tissue.enhanced", "Classification"))
+arrange_gene_spear <- arrange(gene_spear_dat, Gene.name) %>% dplyr::select(-c("Tissue.enriched", "Group.enriched", "Tissue.enhance", "Classification"))
+
+# Make sure there are only shared genes
+length(arrange_protein_spear$Gene.ID == arrange_gene_spear$Gene.ID) ==
+  sum(arrange_protein_spear$Gene.ID == arrange_gene_spear$Gene.ID)
+
+
+# Generate list of correlations for all genes
+cor_list <- NULL
+i <- 1
+plot_list <- list()
+for (tissue in 3:ncol(arrange_protein_spear)) {
+  hold_cor <- cor((log10(arrange_protein_spear[, tissue] + 1)),
+    (log10(arrange_gene_spear[, tissue] + 1)),
+    ## Note I change from kendall to spearman on 12/23/2020
+    method = "spearman"
+  )
+
+  plot_list[i] <- scatterplot(log10(arrange_protein_mat[, tissue] + 1),
+    log10(arrange_gene_mat[, tissue] + 1),
+    xlab = paste0("log10 + 1 proteins for ", colnames(arrange_protein_mat)[tissue]),
+    ylab = paste0("log10 + 1 genes for ", colnames(arrange_protein_mat)[tissue])
+  )
+  i <- i + 1
+
+
+
+  cor_list <- c(cor_list, hold_cor)
+}
+
+names(cor_list) <- colnames(arrange_protein_mat)[3:ncol(arrange_protein_mat)]
+
+cor_list
+```
+
+Remove 0s to better emulate the paper and loop through
+
+Test 0 removal
+
+```{r}
+
+## Below we remove all 0s to emulate the paper
+
+###remove 0 brains; this is how the correlations found in the original paper are made
+gene_brain <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = Brain) %>% filter(gene != 0)
+
+protein_brain <- dplyr::select(arrange_protein_spear,
+                               Gene.ID,
+                               Gene.name,
+                               protein = Brain) %>%
+                  filter(protein != 0)
+
+join_dat <- left_join(protein_brain, gene_brain)
+
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_dat)
+
+cor.test(log10(join_dat$protein + 1),
+         log10(join_dat$gene + 1),
+         method = "spearman" )
+
+
+#Core brain; make it just core genes
+join_core <- join_dat %>% filter(Gene.name %in% core_mat$Gene.Symbol)
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core)
+
+cor.test(log10(join_core$protein + 1),
+         log10(join_core$gene + 1),
+         method = "spearman" )
+```
+
+Make the loop
+
+```{r}
+# #Generalized loop
+# 
+# 
+# #Rho all holds the rho for all genes, and P holds P-values
+# rho_all <- NULL
+# p_all <- NULL
+# #Rho core and p core hold the rho and p values for core gense only
+# rho_core <- NULL
+# p_core <- NULL
+# i <- 1
+# plot_list <- list()
+# 
+# for (tissue in 3:ncol(arrange_protein_spear)) {
+# #Select a tissue
+# cur_tiss <- colnames(arrange_protein_spear)[tissue]
+# #quo tiss to be used in later analyses.
+# quo_tiss <- enquo(cur_tiss)
+# 
+# #Remove 0s for genes
+# gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+# 
+# #Remove 0s for proteins
+# protein_tiss <- dplyr::select(arrange_protein_spear,
+#                               Gene.ID,
+#                               Gene.name,
+#                               protein = !!quo_tiss) %>%
+#                         filter(protein != 0)
+# 
+# #Join non-0 data, this might not be kosher
+# join_dat <- left_join(protein_tiss, gene_tiss) %>%
+#   mutate(protein_log = log10(protein + 1),
+#          gene_log = log10(gene + 1 ))
+# 
+# #REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+# join_dat <- join_dat %>% filter(!is.na(gene))
+# 
+# 
+# scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_dat)
+# 
+# test_all <- cor.test(log10(join_dat$protein + 1),
+#                      log10(join_dat$gene + 1),
+#                      method = "spearman" )
+# 
+# rho_all <- c(rho_all, test_all$estimate)
+# p_all <- c(p_all, test_all$p.value)
+# 
+# 
+# #Core tiss 
+# join_core <- join_dat %>% filter(Gene.name %in% core_mat$Gene.Symbol)
+# 
+# scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core)
+# 
+# test_core <- cor.test(log10(join_core$protein + 1),
+#                       log10(join_core$gene + 1),
+#                       method = "spearman" )
+# 
+# rho_core <- c(rho_core, test_core$estimate)
+# p_core <- c(p_core, test_core$p.value)
+# 
+# 
+# }
+# 
+# data_output <- data.frame(rho_all,
+#                           rho_core,
+#                           p_core,
+#                           row.names = colnames(arrange_protein_spear)[3:ncol(arrange_protein_spear)]) %>% 
+#   rownames_to_column(var = "tissue")
+# 
+# data_output %>% mutate(all_over_core = rho_core/rho_all)
+# 
+# for_melt <- data_output[,-4]
+# 
+# melt_dat  <- reshape::melt(for_melt, id  = "tissue")
+# 
+# ggplot(melt_dat, aes(x=variable, y = value)) +
+#   geom_bar(stat = "identity") + facet_wrap(~tissue)
+# 
+# ggplot(melt_dat, aes(x=tissue, y = value, fill = variable)) +
+#   geom_bar(stat = "identity",width = .5, position = "dodge") +
+#   labs(title = "spearman Rho comparisons all genes vs core matrisome", x = "Tissues", y = "Rho") +
+#   theme_bw() +
+#   theme(axis.text.x = element_text(angle = 80, hjust = 1, vjust = 1, size = 22), text = element_text(size = 20)) +
+#   geom_hline(yintercept = mean(data_output$rho_all), linetype="dashed", color = "blue", size = 1.1) +
+#   geom_hline(yintercept = mean(data_output$rho_core), linetype="dashed", color = "red", size = 1.1) 
+# 
+# ggsave("rho_compare_spearman.pdf", width = 18, height = 10)
+```
+
+Correlations heatmpa (from paper)
+```{r}
+gene_mat <- as.matrix(arrange_gene_mat %>%
+                        filter(Gene.name %in% mat_core_reg$Gene.Symbol) %>%
+                        dplyr::select(-Gene.name, -Gene.ID))
+
+gene_cor <- cor(gene_mat, method = "spearman")
+
+library(pheatmap)
+
+library(reshape2)
+
+pheatmap(gene_cor,
+         cluster_rows = F,
+         cluster_cols = F)
+
+##protein
+
+protein_mat <- as.matrix(arrange_protein_mat %>%
+                        filter(Gene.name %in% mat_core_reg$Gene.Symbol) %>%
+                          dplyr::select(-Gene.name, -Gene.ID))
+
+protein_cor <- cor(protein_mat, method = "spearman")
+
+
+
+pheatmap(protein_cor, cluster_rows = F,
+         cluster_cols = F)
+
+
+###plot version
+library("RColorBrewer")
+library(scales)
+
+
+# Get lower triangle of the correlation matrix
+  get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+
+  #Gene
+  
+gene_cor_m <- melt(gene_cor)
+
+gene_cor_bot <- get_lower_tri(gene_cor)
+
+gene_bot_m <- melt(gene_cor_bot)
+
+ggplot(data= gene_cor_m, aes(x = Var1 , y = Var2) ) + 
+  geom_point(size = 3.5, aes(color = value)) +
+ scale_colour_gradientn(colours = rev(brewer.pal(11,"RdBu")))+ guides(fill="legend")
+
+ggplot(data= gene_bot_m, aes(x = Var1 , y = Var2) ) + 
+  geom_point(size = 3.5, aes(color = value)) +
+ scale_colour_gradientn(colours = rev(brewer.pal(11,"RdBu")))+ guides(fill="legend")
+
+
+#Protein
+
+protein_cor_m <- melt(protein_cor)
+
+protein_cor_top <- get_upper_tri(protein_cor)
+
+protein_top_m <- melt(protein_cor_top)
+
+protein_cor_bot <- get_lower_tri(protein_cor)
+
+protein_bot_m <- melt(protein_cor_bot)
+
+ggplot(data= protein_cor_m, aes(x = Var1 , y = Var2) ) + 
+  geom_point(size = 3.5, aes(color = value)) +
+ scale_colour_gradientn(colours = rev(brewer.pal(11,"RdBu")))+ guides(fill="legend")
+
+ggplot(data= protein_bot_m, aes(x = Var1 , y = Var2) ) + 
+  geom_point(size = 3.5, aes(color = value)) +
+ scale_colour_gradientn(colours = rev(brewer.pal(11,"RdBu")))+ guides(fill="legend")
+
+
+left_join(protein_top_m, gene_bot_m)
+
+test_prot <- protein_top_m
+test_gene <- gene_bot_m
+
+join_tri <- test_prot %>% mutate(value = ifelse(is.na(value), gene_bot_m$value, value))
+test_gene
+test_prot
+
+
+ggplot(data= join_tri, aes(x = Var1 , y = Var2) ) + 
+  geom_point(size = 6, aes(color = value)) +
+ scale_colour_gradientn(colours = rev(brewer.pal(11,"RdBu")))+ guides(fill="legend") +
+  theme(axis.text.x = element_text(angle = 80, hjust = 1, vjust = 1), text = element_text(size = 16))  +
+  labs(title = "Matrisome gene/protein correlations across tissues", x = "Gene Correlations", y = "Protein Correlations")
+
+ggsave("heatmap_rho.pdf", width = 10, height = 8)
+
+```
+
+
+```{r}
+# #Generalized loop but with permuations
+# 
+# 
+# 
+# #Rho core and p core hold the rho and p values for core gense only
+# rho_core <- NULL
+# p_core <- NULL
+# i <- 1
+# #plot_list <- list()
+# 
+# final_df <- NULL
+# for (tissue in 3:ncol(arrange_protein_spear)) {
+# #Select a tissue
+# cur_tiss <- colnames(arrange_protein_spear)[tissue]
+# #quo tiss to be used in later analyses.
+# quo_tiss <- enquo(cur_tiss)
+# 
+# #Remove 0s for genes
+# gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+# 
+# #Remove 0s for proteins
+# protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+# 
+# #Join non-0 data, this might not be kosher
+# join_dat <- left_join(protein_tiss, gene_tiss)
+# 
+# #REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+# join_dat <- join_dat %>% filter(!is.na(gene))
+# 
+# #Core tiss 
+# join_core <- join_dat %>% filter(Gene.name %in% core_mat$Gene.Symbol)
+# 
+# scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core)
+# 
+# test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman", exact = F )
+# 
+# rho_core <- c(rho_core, test_core$estimate)
+# p_core <- c(p_core, test_core$p.value)
+# 
+# gene_n <- nrow(join_core)
+# 
+# 
+# #Permute genes
+# set.seed(1)
+# 
+# rho_perm <- NULL
+# p_perm <- NULL
+# for (perm in 1:10000) {
+#   perm_frame <- sample_n(join_dat, gene_n)
+#   test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+#   rho_perm <- c(rho_perm, test_perm$estimate)
+#   p_perm <- c(p_perm, test_perm$p.value)
+#   
+#   
+# }
+# 
+# #ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+# temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+# 
+# final_df <- rbind(final_df, temp_df)
+# 
+# }
+# 
+# 
+# colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+# 
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted Correlations and Core Matrisome Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("rho_permuted.pdf", height = 7, width = 13)
+# 
+# write.csv(arrange_gene_spear, "data_out/gene_Wang_etal.csv",row.names = F)
+# write.csv(arrange_protein_spear, "data_out/protein_Wang_etal.csv",row.names = F)
+# 
+# log10_gene_spear <- cbind(arrange_gene_spear[,1:2], (log10(as.matrix(arrange_gene_spear[,-1:-2]) + 1)))
+# log10_protein_spear <- cbind(arrange_protein_spear[,1:2], (log10(as.matrix(arrange_protein_spear[,-1:-2]) + 1)))
+# 
+# 
+# write.csv(log10_gene_spear, "data_out/gene_Wang_etal_log10.csv",row.names = F)
+# write.csv(log10_protein_spear, "data_out/protein_Wang_etal_log10.csv",row.names = F)
+```
+
+MArc
+```{r}
+# arrange_gene_spear
+# arrange_protein_spear
+# 
+# #With 0s
+# scatterplot(log10(arrange_protein_spear$Fallopian.tube + 1) ~ log10(arrange_gene_spear$Fallopian.tube + 1), data= join_core)
+# 
+# core_gene_spear <- arrange_gene_spear %>% filter(Gene.name %in% core_mat$Gene.Symbol)
+# 
+# core_protein_spear <- arrange_protein_spear %>% filter(Gene.name %in% core_mat$Gene.Symbol)
+# 
+# scatterplot(log10(core_protein_spear$Fallopian.tube + 1) ~ log10(core_gene_spear$Fallopian.tube + 1), data= join_core)
+# 
+# #No 0s
+# no_0_gene <- arrange_gene_spear %>% filter()
+
+
+```
+Re-do with ecm regulators
+```{r}
+# #Generalized loop but with permuations
+# ecm_dat <- read.csv("data_in/ecm_regulators.csv", stringsAsFactors = F)
+# 
+# 
+# #Rho core and p core hold the rho and p values for core gense only
+# rho_core <- NULL
+# p_core <- NULL
+# i <- 1
+# #plot_list <- list()
+# 
+# final_df <- NULL
+# for (tissue in 3:ncol(arrange_protein_spear)) {
+# #Select a tissue
+# cur_tiss <- colnames(arrange_protein_spear)[tissue]
+# #quo tiss to be used in later analyses.
+# quo_tiss <- enquo(cur_tiss)
+# 
+# #Remove 0s for genes
+# gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+# 
+# #Remove 0s for proteins
+# protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+# 
+# #Join non-0 data, this might not be kosher
+# join_dat <- left_join(protein_tiss, gene_tiss)
+# 
+# #REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+# join_dat <- join_dat %>% filter(!is.na(gene))
+# 
+# #Core tiss 
+# join_core <- join_dat %>% filter(Gene.name %in% ecm_dat$Gene)
+# 
+# scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core)
+# 
+# test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman" , exact = F)
+# 
+# rho_core <- c(rho_core, test_core$estimate)
+# p_core <- c(p_core, test_core$p.value)
+# 
+# gene_n <- nrow(join_core)
+# 
+# 
+# #Permute genes
+# set.seed(1)
+# 
+# rho_perm <- NULL
+# p_perm <- NULL
+# for (perm in 1:10000) {
+#   perm_frame <- sample_n(join_dat, gene_n)
+#   test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+#   rho_perm <- c(rho_perm, test_perm$estimate)
+#   p_perm <- c(p_perm, test_perm$p.value)
+#   
+#   
+# }
+# 
+# #ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+# temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+# 
+# final_df <- rbind(final_df, temp_df)
+# 
+# }
+# 
+# 
+# colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+# 
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted Correlations and ECM regulators Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme_grey(base_size = 15) +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("data_out/rho_permuted_ecm_reg.pdf", height = 7, width = 13)
+
+```
+
+
+Re-do with ecm regulators
+```{r}
+# #Generalized loop but with samplinh
+# ecm_dat <- read.csv("data_in/ecm_regulators.csv", stringsAsFactors = F)
+# 
+# ecm_core_dat <- c(ecm_dat$Gene, core_mat$Gene.Symbol)
+# 
+# #Rho core and p core hold the rho and p values for core gense only
+# rho_core <- NULL
+# p_core <- NULL
+# i <- 1
+# #plot_list <- list()
+# gene_prot_counter <- NULL
+# 
+# final_df <- NULL
+# for (tissue in 3:ncol(arrange_protein_spear)) {
+# #Select a tissue
+# cur_tiss <- colnames(arrange_protein_spear)[tissue]
+# #quo tiss to be used in later analyses.
+# quo_tiss <- enquo(cur_tiss)
+# 
+# #Remove 0s for genes
+# gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+# 
+# #Remove 0s for proteins
+# protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+# 
+# #Join non-0 data, this might not be kosher
+# join_dat <- left_join(protein_tiss, gene_tiss)
+# 
+# #REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+# join_dat <- join_dat %>% filter(!is.na(gene))
+# 
+# #Core tiss 
+# join_core <- join_dat %>% filter(Gene.name %in% ecm_core_dat)
+# 
+# scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core)
+# 
+# test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman" , exact = F)
+# 
+# rho_core <- c(rho_core, test_core$estimate)
+# p_core <- c(p_core, test_core$p.value)
+# 
+# gene_n <- nrow(join_core)
+# 
+# gene_prot_counter <- rbind(gene_prot_counter, cbind(cur_tiss, gene_n))
+# 
+# #Permute genes
+# set.seed(1)
+# 
+# rho_perm <- NULL
+# p_perm <- NULL
+# for (perm in 1:10000) {
+#   perm_frame <- sample_n(join_dat, gene_n)
+#   test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+#   rho_perm <- c(rho_perm, test_perm$estimate)
+#   p_perm <- c(p_perm, test_perm$p.value)
+#   
+#   
+# }
+# 
+# #ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+# temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+# 
+# final_df <- rbind(final_df, temp_df)
+# 
+# }
+# 
+# 
+# colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+# 
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted Correlations and ECM regulators and Core Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("data_out/rho_permuted_ecm_reg_n_core.pdf", height = 7, width = 13)
+# 
+# gene_prot_counter <- as.data.frame(gene_prot_counter) %>%
+#   arrange(desc(gene_n)) %>%
+#   rename(Tissue =cur_tiss, pairs = gene_n)
+# 
+# corr_vs_pair <- left_join(gene_prot_counter, select(final_df, Tissue, Mat_Core) %>% unique()) %>%
+#   mutate(pairs = as.numeric(pairs))
+# 
+# 
+# cor.test(corr_vs_pair$pairs, corr_vs_pair$Mat_Core, method = "spearman")
+# 
+# write.csv(gene_prot_counter, "data_out/gene-protein-corr-pairs.csv")
+```
+
+### This is the final plot code
+
+Re-do with ALL ecm regulators
+```{r}
+#Generalized loop but with permuations
+mat_core_reg <- mat_core_reg
+
+
+#Rho core and p core hold the rho and p values for core gense only
+rho_core <- NULL
+p_core <- NULL
+rho_core_list <- list()
+i <- 1
+#plot_list <- list()
+
+final_df <- NULL
+for (tissue in 3:ncol(arrange_protein_spear)) {
+#Select a tissue
+cur_tiss <- colnames(arrange_protein_spear)[tissue]
+
+#quo tiss to be used in later analyses.
+quo_tiss <- enquo(cur_tiss)
+
+#Remove 0s for genes
+gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+
+#Remove 0s for proteins
+protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+
+#Join non-0 data, this might not be kosher
+join_dat <- left_join(protein_tiss, gene_tiss)
+
+#REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+join_dat <- join_dat %>% filter(!is.na(gene)) %>%
+  mutate(
+         protein_log10 = log10(protein + 1),
+         gene_log10 = log10(gene + 1))
+
+#Core tiss 
+join_core <- join_dat %>% filter(Gene.name %in%  mat_core_reg$Gene.Symbol)
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core, main=tissue)
+## Note 12/23/2020 change from log10ing int he code below to using new column
+test_core <- cor.test(join_core$protein_log10, join_core$gene_log10, method = "spearman" , exact = F)
+
+rho_core <- c(rho_core, test_core$estimate)
+p_core <- c(p_core, test_core$p.value)
+rho_core_list[[cur_tiss]] <-  test_core$estimate
+gene_n <- nrow(join_core)
+
+
+#Permute genes
+set.seed(1)
+
+rho_perm <- NULL
+p_perm <- NULL
+for (perm in 1:10000) {
+  perm_frame <- sample_n(join_dat, gene_n)
+  test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+  rho_perm <- c(rho_perm, test_perm$estimate)
+  p_perm <- c(p_perm, test_perm$p.value)
+  
+  
+}
+
+#ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+
+final_df <- rbind(final_df, temp_df)
+
+}
+
+summ_df <- final_df %>%  dplyr::group_by(Tissue) %>%
+  summarise(q_25 = quantile(Spearman_Rho, .25), q_75 = quantile(Spearman_Rho, .75),
+            stdv = sd(Spearman_Rho),
+            mean_rho = mean(Spearman_Rho),
+            Mat_Core = mean(Mat_Core))
+
+
+final_plot <- left_join(final_df, summ_df)
+
+ggplot(final_plot) +
+  geom_violin(aes(x= Tissue, y = Spearman_Rho), fill = "dodgerblue") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho + stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho - stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red")  +
+  theme_classic() +
+  labs(title = "Permuted Correlations and ECM regulators Correlations", y= "Spearman Rho Correlatiosn") +
+  theme(axis.text.x = element_text(angle = 85, hjust = 1))
+
+
+ggsave("data_out/rho_permuted_core_reg_all_stdv.pdf", height = 7, width = 13)
+
+summ_df_table <- summ_df %>% mutate(over_25 = ifelse(Mat_Core >= q_25, TRUE, FALSE),
+                                    over_bot_stdv = ifelse(Mat_Core >= (mean_rho - stdv),
+                                                           TRUE, FALSE))
+
+table(summ_df_table$over_25)
+
+table(summ_df_table$over_bot_stdv)
+
+write.csv(summ_df_table, file = "data_out/protein_gene_corr.csv")
+
+```
+
+Collagen
+
+```{r}
+#Generalized loop but with permuations
+mat_collagen <- mat_core_reg %>% filter(Category == "Collagens")
+
+
+#Rho core and p core hold the rho and p values for core gense only
+rho_core <- NULL
+p_core <- NULL
+i <- 1
+#plot_list <- list()
+
+final_df <- NULL
+for (tissue in 3:ncol(arrange_protein_spear)) {
+#Select a tissue
+cur_tiss <- colnames(arrange_protein_spear)[tissue]
+#quo tiss to be used in later analyses.
+quo_tiss <- enquo(cur_tiss)
+
+#Remove 0s for genes
+gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+
+#Remove 0s for proteins
+protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+
+#Join non-0 data, this might not be kosher
+join_dat <- left_join(protein_tiss, gene_tiss)
+
+#REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+join_dat <- join_dat %>% filter(!is.na(gene))
+
+#Core tiss 
+join_core <- join_dat %>% filter(Gene.name %in%  mat_collagen$Gene.Symbol)
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core, main=tissue)
+
+test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman" , exact = F)
+
+rho_core <- c(rho_core, test_core$estimate)
+p_core <- c(p_core, test_core$p.value)
+
+gene_n <- nrow(join_core)
+
+
+#Permute genes
+set.seed(1)
+
+rho_perm <- NULL
+p_perm <- NULL
+for (perm in 1:10000) {
+  perm_frame <- sample_n(join_dat, gene_n)
+  test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+  rho_perm <- c(rho_perm, test_perm$estimate)
+  p_perm <- c(p_perm, test_perm$p.value)
+  
+  
+}
+
+#ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+
+final_df <- rbind(final_df, temp_df)
+
+}
+
+
+colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted Collagen Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("rho_permuted_collagen.pdf", height = 7, width = 13)
+# #######
+
+
+summ_df <- final_df %>%  dplyr::group_by(Tissue) %>%
+  summarise(q_25 = quantile(Spearman_Rho, .25), q_75 = quantile(Spearman_Rho, .75),
+            stdv = sd(Spearman_Rho),
+            mean_rho = mean(Spearman_Rho),
+            Mat_Core = mean(Mat_Core))
+
+
+final_plot <- left_join(final_df, summ_df)
+
+ggplot(final_plot) +
+  geom_violin(aes(x= Tissue, y = Spearman_Rho), fill = "#E66100") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho + stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho - stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red")  +
+  theme_classic() +
+  labs(title = "Permuted Correlations Collagens Correlations", y= "Spearman Rho Correlatiosn") +
+  theme(axis.text.x = element_text(angle = 85, hjust = 1))
+
+
+ggsave("data_out/rho_permuted_collagen_stdv.pdf", height = 7, width = 13)
+
+summ_df_table <- summ_df %>% mutate(over_25 = ifelse(Mat_Core >= q_25, TRUE, FALSE),
+                                    over_bot_stdv = ifelse(Mat_Core >= (mean_rho - stdv),
+                                                           TRUE, FALSE))
+
+table(summ_df_table$over_25)
+
+table(summ_df_table$over_bot_stdv)
+
+write.csv(summ_df_table, file = "data_out/collagen_gene_corr.csv")
+
+```
+
+
+Glycoprotein
+
+```{r}
+#Generalized loop but with permuations
+mat_glycoprotein <- mat_core_reg %>% filter(Category == "ECM Glycoproteins")
+
+
+#Rho core and p core hold the rho and p values for core gense only
+rho_core <- NULL
+p_core <- NULL
+i <- 1
+#plot_list <- list()
+
+final_df <- NULL
+for (tissue in 3:ncol(arrange_protein_spear)) {
+#Select a tissue
+cur_tiss <- colnames(arrange_protein_spear)[tissue]
+#quo tiss to be used in later analyses.
+quo_tiss <- enquo(cur_tiss)
+
+#Remove 0s for genes
+gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+
+#Remove 0s for proteins
+protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+
+#Join non-0 data, this might not be kosher
+join_dat <- left_join(protein_tiss, gene_tiss)
+
+#REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+join_dat <- join_dat %>% filter(!is.na(gene))
+
+#Core tiss 
+join_core <- join_dat %>% filter(Gene.name %in%  mat_glycoprotein$Gene.Symbol)
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core, main=tissue)
+
+test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman" , exact = F)
+
+rho_core <- c(rho_core, test_core$estimate)
+p_core <- c(p_core, test_core$p.value)
+
+gene_n <- nrow(join_core)
+
+
+#Permute genes
+set.seed(1)
+
+rho_perm <- NULL
+p_perm <- NULL
+for (perm in 1:10000) {
+  perm_frame <- sample_n(join_dat, gene_n)
+  test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+  rho_perm <- c(rho_perm, test_perm$estimate)
+  p_perm <- c(p_perm, test_perm$p.value)
+  
+  
+}
+
+#ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+
+final_df <- rbind(final_df, temp_df)
+
+}
+
+
+colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted Glycoprotein Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("rho_permuted_glycoprotein.pdf", height = 7, width = 13)
+#######
+
+
+summ_df <- final_df %>%  dplyr::group_by(Tissue) %>%
+  summarise(q_25 = quantile(Spearman_Rho, .25), q_75 = quantile(Spearman_Rho, .75),
+            stdv = sd(Spearman_Rho),
+            mean_rho = mean(Spearman_Rho),
+            Mat_Core = mean(Mat_Core))
+
+
+final_plot <- left_join(final_df, summ_df)
+
+ggplot(final_plot) +
+  geom_violin(aes(x= Tissue, y = Spearman_Rho), fill = "#5D3A9B") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho + stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho - stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red")  +
+  theme_classic() +
+  labs(title = "Permuted Correlations for Glycoproteins Correlations", y= "Spearman Rho Correlatiosn") +
+  theme(axis.text.x = element_text(angle = 85, hjust = 1))
+
+
+ggsave("data_out/rho_permuted_glycoprotein_stdv.pdf", height = 7, width = 13)
+
+summ_df_table <- summ_df %>% mutate(over_25 = ifelse(Mat_Core >= q_25, TRUE, FALSE),
+                                    over_bot_stdv = ifelse(Mat_Core >= (mean_rho - stdv),
+                                                           TRUE, FALSE))
+
+table(summ_df_table$over_25)
+
+table(summ_df_table$over_bot_stdv)
+
+write.csv(summ_df_table, file = "data_out/glycoprotein_gene_corr.csv")
+
+```
+
+Regulators
+
+```{r}
+#Generalized loop but with permuations
+mat_regulators <- mat_core_reg %>% filter(Category == "ECM Regulators")
+
+
+#Rho core and p core hold the rho and p values for core gense only
+rho_core <- NULL
+p_core <- NULL
+i <- 1
+#plot_list <- list()
+
+final_df <- NULL
+for (tissue in 3:ncol(arrange_protein_spear)) {
+#Select a tissue
+cur_tiss <- colnames(arrange_protein_spear)[tissue]
+#quo tiss to be used in later analyses.
+quo_tiss <- enquo(cur_tiss)
+
+#Remove 0s for genes
+gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+
+#Remove 0s for proteins
+protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+
+#Join non-0 data, this might not be kosher
+join_dat <- left_join(protein_tiss, gene_tiss)
+
+#REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+join_dat <- join_dat %>% filter(!is.na(gene))
+
+#Core tiss 
+join_core <- join_dat %>% filter(Gene.name %in%  mat_regulators$Gene.Symbol)
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core, main=tissue)
+
+test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman" , exact = F)
+
+rho_core <- c(rho_core, test_core$estimate)
+p_core <- c(p_core, test_core$p.value)
+
+gene_n <- nrow(join_core)
+
+
+#Permute genes
+set.seed(1)
+
+rho_perm <- NULL
+p_perm <- NULL
+for (perm in 1:10000) {
+  perm_frame <- sample_n(join_dat, gene_n)
+  test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+  rho_perm <- c(rho_perm, test_perm$estimate)
+  p_perm <- c(p_perm, test_perm$p.value)
+  
+  
+}
+
+#ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+
+final_df <- rbind(final_df, temp_df)
+
+}
+
+
+colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted regulators Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("rho_permuted_regulators.pdf", height = 7, width = 13)
+#######
+
+
+summ_df <- final_df %>%  dplyr::group_by(Tissue) %>%
+  summarise(q_25 = quantile(Spearman_Rho, .25), q_75 = quantile(Spearman_Rho, .75),
+            stdv = sd(Spearman_Rho),
+            mean_rho = mean(Spearman_Rho),
+            Mat_Core = mean(Mat_Core))
+
+
+final_plot <- left_join(final_df, summ_df)
+
+ggplot(final_plot) +
+  geom_violin(aes(x= Tissue, y = Spearman_Rho), fill = "#E1BE6A") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho + stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho - stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red")  +
+  theme_classic() +
+  labs(title = "Permuted Correlations for Regulatorss Correlations", y= "Spearman Rho Correlatiosn") +
+  theme(axis.text.x = element_text(angle = 85, hjust = 1))
+
+
+ggsave("data_out/rho_permuted_regulators_stdv.pdf", height = 7, width = 13)
+
+summ_df_table <- summ_df %>% mutate(over_25 = ifelse(Mat_Core >= q_25, TRUE, FALSE),
+                                    over_bot_stdv = ifelse(Mat_Core >= (mean_rho - stdv),
+                                                           TRUE, FALSE))
+
+table(summ_df_table$over_25)
+
+table(summ_df_table$over_bot_stdv)
+
+write.csv(summ_df_table, file = "data_out/regulators_gene_corr.csv")
+
+```
+
+Proteoglycans
+
+```{r}
+#Generalized loop but with permuations
+mat_proteoglycans <- mat_core_reg %>% filter(Category == "Proteoglycans")
+
+
+#Rho core and p core hold the rho and p values for core gense only
+rho_core <- NULL
+p_core <- NULL
+i <- 1
+#plot_list <- list()
+
+final_df <- NULL
+for (tissue in 3:ncol(arrange_protein_spear)) {
+#Select a tissue
+cur_tiss <- colnames(arrange_protein_spear)[tissue]
+#quo tiss to be used in later analyses.
+quo_tiss <- enquo(cur_tiss)
+
+#Remove 0s for genes
+gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+
+#Remove 0s for proteins
+protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+
+#Join non-0 data, this might not be kosher
+join_dat <- left_join(protein_tiss, gene_tiss)
+
+#REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+join_dat <- join_dat %>% filter(!is.na(gene))
+
+#Core tiss 
+join_core <- join_dat %>% filter(Gene.name %in%  mat_proteoglycans$Gene.Symbol)
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core, main=tissue)
+
+test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman" , exact = F)
+
+rho_core <- c(rho_core, test_core$estimate)
+p_core <- c(p_core, test_core$p.value)
+
+gene_n <- nrow(join_core)
+
+
+#Permute genes
+set.seed(1)
+
+rho_perm <- NULL
+p_perm <- NULL
+for (perm in 1:10000) {
+  perm_frame <- sample_n(join_dat, gene_n)
+  test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+  rho_perm <- c(rho_perm, test_perm$estimate)
+  p_perm <- c(p_perm, test_perm$p.value)
+  
+  
+}
+
+#ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+
+final_df <- rbind(final_df, temp_df)
+
+}
+
+
+colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted proteoglycans Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("rho_permuted_proteoglycans.pdf", height = 7, width = 13)
+#######
+
+
+summ_df <- final_df %>%  dplyr::group_by(Tissue) %>%
+  summarise(q_25 = quantile(Spearman_Rho, .25), q_75 = quantile(Spearman_Rho, .75),
+            stdv = sd(Spearman_Rho),
+            mean_rho = mean(Spearman_Rho),
+            Mat_Core = mean(Mat_Core))
+
+
+final_plot <- left_join(final_df, summ_df)
+
+ggplot(final_plot) +
+  geom_violin(aes(x= Tissue, y = Spearman_Rho), fill = "#994F00") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho + stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho - stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red")  +
+  theme_classic() +
+  labs(title = "Permuted Correlations for Proteoglycanss Correlations", y= "Spearman Rho Correlatiosn") +
+  theme(axis.text.x = element_text(angle = 85, hjust = 1))
+
+
+ggsave("data_out/rho_permuted_proteoglycans_stdv.pdf", height = 7, width = 13)
+
+summ_df_table <- summ_df %>% mutate(over_25 = ifelse(Mat_Core >= q_25, TRUE, FALSE),
+                                    over_bot_stdv = ifelse(Mat_Core >= (mean_rho - stdv),
+                                                           TRUE, FALSE))
+
+table(summ_df_table$over_25)
+
+table(summ_df_table$over_bot_stdv)
+
+write.csv(summ_df_table, file = "data_out/proteoglycans_gene_corr.csv")
+
+```
+
+
+
+No glycoproteins
+
+```{r}
+#Generalized loop but with permuations
+mat_no_glyco <- mat_core_reg %>% filter(Category != "ECM Glycoproteins")
+
+
+#Rho core and p core hold the rho and p values for core gense only
+rho_core <- NULL
+p_core <- NULL
+i <- 1
+#plot_list <- list()
+
+final_df <- NULL
+for (tissue in 3:ncol(arrange_protein_spear)) {
+#Select a tissue
+cur_tiss <- colnames(arrange_protein_spear)[tissue]
+#quo tiss to be used in later analyses.
+quo_tiss <- enquo(cur_tiss)
+
+#Remove 0s for genes
+gene_tiss <- dplyr::select(arrange_gene_spear, Gene.ID, Gene.name, gene = !!quo_tiss) %>% filter(gene != 0)
+
+#Remove 0s for proteins
+protein_tiss <- dplyr::select(arrange_protein_spear, Gene.ID, Gene.name, protein = !!quo_tiss) %>% filter(protein != 0)
+
+#Join non-0 data, this might not be kosher
+join_dat <- left_join(protein_tiss, gene_tiss)
+
+#REMOVING NAs THIS WAS NOT DONE PRIOR TO MY FIRST THESIS COMITTEE MEETING REMOVE THIS CODE IF YOU WANT THAT DATA
+join_dat <- join_dat %>% filter(!is.na(gene))
+
+#Core tiss 
+join_core <- join_dat %>% filter(Gene.name %in%  mat_no_glyco$Gene.Symbol)
+
+scatterplot(log10(protein + 1) ~ log10(gene + 1), data= join_core, main=tissue)
+
+test_core <- cor.test(log10(join_core$protein + 1), log10(join_core$gene + 1), method = "spearman" , exact = F)
+
+rho_core <- c(rho_core, test_core$estimate)
+p_core <- c(p_core, test_core$p.value)
+
+gene_n <- nrow(join_core)
+
+
+#Permute genes
+set.seed(1)
+
+rho_perm <- NULL
+p_perm <- NULL
+for (perm in 1:10000) {
+  perm_frame <- sample_n(join_dat, gene_n)
+  test_perm <- cor.test(log10(perm_frame$protein + 1), log10(perm_frame$gene + 1), method = "spearman", exact = F )
+  rho_perm <- c(rho_perm, test_perm$estimate)
+  p_perm <- c(p_perm, test_perm$p.value)
+  
+  
+}
+
+#ggplot(as.data.frame(rho_perm), aes(x = rho_perm)) + geom_histogram() + geom_vline(xintercept = test_core$estimate, linetype= "dashed", color = "blue", size =1.5)
+temp_df <- data.frame(cur_tiss,rho_perm, test_core$estimate)
+
+final_df <- rbind(final_df, temp_df)
+
+}
+
+
+colnames(final_df) <- c("Tissue", "Spearman_Rho", "Mat_Core")
+
+# ggplot(final_df) + geom_violin(aes(x= Tissue, y = Spearman_Rho, fill = Tissue)) + geom_crossbar(aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+#   labs(title = "Permuted no_glyco Correlations", y= "Spearman Rho Correlatiosn") +
+#   theme(axis.text.x = element_text(angle = 85, hjust = 1))
+# 
+# ggsave("rho_permuted_no_glyco.pdf", height = 7, width = 13)
+#######
+
+
+summ_df <- final_df %>%  dplyr::group_by(Tissue) %>%
+  summarise(q_25 = quantile(Spearman_Rho, .25), q_75 = quantile(Spearman_Rho, .75),
+            stdv = sd(Spearman_Rho),
+            mean_rho = mean(Spearman_Rho),
+            Mat_Core = mean(Mat_Core))
+
+
+final_plot <- left_join(final_df, summ_df)
+
+ggplot(final_plot) +
+  geom_violin(aes(x= Tissue, y = Spearman_Rho), fill = "cyan") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = Mat_Core), ymin=0, ymax=0) +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho + stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red") +
+  geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho - stdv),
+                ymin=0, ymax=0, fatten = 1, color = "red")  +
+  theme_classic() +
+  labs(title = "Permuted Correlations without Glycoproteins Correlations", y= "Spearman Rho Correlatiosn") +
+  theme(axis.text.x = element_text(angle = 85, hjust = 1))
+
+
+ggsave("data_out/rho_permuted_no_glyco_stdv.pdf", height = 7, width = 13)
+
+summ_df_table <- summ_df %>% mutate(over_25 = ifelse(Mat_Core >= q_25, TRUE, FALSE),
+                                    over_bot_stdv = ifelse(Mat_Core >= (mean_rho - stdv),
+                                                           TRUE, FALSE))
+
+table(summ_df_table$over_25)
+
+table(summ_df_table$over_bot_stdv)
+
+write.csv(summ_df_table, file = "data_out/no_glyco_gene_corr.csv")
+
+```
+
+
+
+Generating summary statistics for cor reg all
+```{r}
+summarised_cor_reg <- final_df %>% group_by(Tissue) %>% 
+  summarise(distr_mean = mean(Spearman_Rho),
+            distr_median = median(Spearman_Rho),
+            matrisome_rho = mean(Mat_Core))
+
+summarised_cor_reg <- summarised_cor_reg %>% 
+                            mutate(mean_difference = distr_mean - matrisome_rho,
+                                  median_difference = distr_median - matrisome_rho)
+
+write.csv(summarised_cor_reg, "summarized_core_reg_correlations.cvs", row.names = F)
+
+#Mean of the average distribution
+mean(summarised_cor_reg$distr_mean)
+#Mean of the matrisome_rhos
+mean(summarised_cor_reg$matrisome_rho)
+
+#Median of the average distribution
+median(summarised_cor_reg$distr_mean)
+#Median of the matrisome_rhos
+median(summarised_cor_reg$matrisome_rho)
+
+```
+
+
+
+
+
