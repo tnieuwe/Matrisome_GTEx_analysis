@@ -56,35 +56,6 @@ comparison <- c("all_tcga")
 
 tissue = tissue_list[1]
 
-## Old loop which removes non shared genes
-
-# for (tissue in tissue_list) {
-#     if (comparison == "all_tcga"){
-#         filename = paste0(tissue,"_normal_cancer_rank_change.csv")
-#     } else if (comparison == "gtex_tcga"){
-#         filename = paste0(tissue,"_gtex_tcga_rank_change.csv")
-#     } else if (comparison == "tcga_tcga"){
-#         filename = paste0(tissue,"_tcga_n_c_rank_change.csv")
-#     }
-#     
-#     
-# temp_dat <- read.csv(paste0("output/",filename))[,-1:-2] %>%
-#     mutate(cancer_rank = 1:n()) %>% set_names(c("genes",
-#                                                 paste0("rank_change_",tissue),
-#                                                 paste0("cancer_rank_",tissue))) %>%
-#     filter(genes != "SERPINA3")
-#     if (tissue == tissue_list[1]) {
-#      final_genes <- temp_dat$genes
-#      final_dat <- temp_dat
-#     }
-# temp_genes <- temp_dat$genes
-# final_genes <- intersect(final_genes, temp_genes)
-# if (tissue != tissue_list[1]) {
-#     final_dat <- left_join(final_dat, temp_dat) %>%
-#         filter(genes %in% final_genes)
-# }
-# 
-# }
 
 ## New loop which keeps NA Genes
 
@@ -138,25 +109,10 @@ rank_change_mat <- column_to_rownames(rank_change_dat, "genes")
 
 cancer_rank_dat <- final_dat %>% select(genes, starts_with("cancer"))
 
-```
-Rank change dat analysis
-```{r}
+
 ## Seer correlations between rank changes
 ggpairs(rank_change_mat)
 
-## Old function, see in second chunck
-# quants = 4
-# x = rank_change_mat$rank_change_lung
-# quantile_position <- function(x, quants = 4, na_rm = TRUE){
-#     quant_number <- 1/quants
-#     percentile <- seq(0, 1, by =quant_number)
-#     quants_out <- quantile(x, percentile, na.rm = na_rm)
-#     out_dat <- x
-#     for (i in seq(quants)) {
-#         out_dat[x >= quants_out[i]] <- i
-#     }
-#     out_dat
-# }
 
 ## Generate a matrix of quantile ranks
 quantile_rank <- rank_change_mat %>% mutate_all(list(~ quantile_position(., quants = 10)))
@@ -186,7 +142,7 @@ write.csv(joined_out, paste0("output/",comparison,"_current_sum_ranks.csv"), row
 ordered_join_out <- arrange(joined_out, desc(sum_ranks)) %>%
   filter(!is.na(sum_ranks))
 
-plot_join_out <- ordered_join_out %>%
+ordered_join_out <- ordered_join_out %>%
   filter(!is.na(sum_ranks)) %>%
   mutate(top_bot = case_when(
   genes %in% head(ordered_join_out$genes, 10) ~ "top",
@@ -384,7 +340,7 @@ pheatmap(train_test_ranks_ord,
 
 ```
 
-Comvine plots
+Combine plots
 
 ```{r}
 train_2bind <-  train_test_ranks_ord
