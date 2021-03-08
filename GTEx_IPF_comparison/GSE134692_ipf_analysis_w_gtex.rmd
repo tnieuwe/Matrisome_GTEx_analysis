@@ -1,0 +1,487 @@
+---
+title: "GSE134692 Analysis"
+author: "Tim Nieuwenhuis"
+date: "4/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DESeq2)
+library(tidyverse)
+library(recount)
+library(viridis)
+library(EnvStats)
+library(GMD)
+library(fields)
+library(viridis)
+library(data.table)
+#matrisome_dat <- read.csv("matrisome_hs_masterlist_EDIT_r.csv")
+
+#colnames(matrisome_dat)[1] <- "Division"
+
+#matrisome_dat <- matrisome_dat %>% filter(Division == "Core matrisome" | Category == "ECM Regulators")
+
+
+```
+
+
+```{r}
+
+## Files accesible throug: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE134692
+samp_dat <- read.table("data_in/GSE134692_design.txt", header = T, fill = T, sep = "\t")
+
+gene_dat <- read.table("data_in/GSE134692_gene_annotation.txt", header = T,"\t")
+
+counts_dat <- read.table("data_in/GSE134692_raw_counts.txt", header = T, row.names = 1, sep = "\t")
+
+colnames(counts_dat) <- samp_dat$SampleName
+
+#Round to counts
+
+counts_dat <- round(counts_dat)
+
+```
+
+Gtex data
+```{r}
+load("data_in/gtex-gene-counts-lung.rda")
+pneum_dat <- read.csv("data_in/gtex_pneumo.csv") %>%
+  filter(type_num %in% c("0", "3", "2-3", "2"))
+
+##Get official names to join with pneum_dat, god I hate how they named it
+lung_dict <- mutate(lungtab, pneum_id = str_sub(SAMPID, end = -10)) %>%
+  select(SUBJID, SAMPID, pneum_id)
+
+pneum_dat <- left_join(pneum_dat, lung_dict) %>% drop_na()
+
+set.seed(123)
+pneum_dat_g0 <- filter(pneum_dat, type_num %in% c("3", "2-3", "2")) %>%
+  sample_n(10)
+pneum_dat_0 <- filter(pneum_dat, type_num == "0") %>%
+  sample_n(10)
+
+pneum_keep <- rbind(pneum_dat_g0,pneum_dat_0) 
+ind <- lungtab$SUBJID %in% pneum_keep$SUBJID
+lungdat <- lungdat[,ind]
+
+#order lung dat on pneum_keep
+ord_ind <- match(pneum_keep$SAMPID, colnames(lungdat))
+lungdat <- lungdat[,ord_ind]
+
+lungdat[1:3,1:3]
+
+gtab <- gtab %>% dplyr::mutate(gene_clean = gsub("[.].*","",gene_id))
+
+##Remove gtab duplicates
+ind_dup <- !duplicated(gtab$gene_clean)
+gtab_filt <- gtab[ind_dup,]
+lungdat_filt <- lungdat[ind_dup,]
+## Post duplicate match check
+ind_match <- match(rownames(lungdat_filt), gtab_filt$gene_id)
+gtab_filt <- gtab_filt[ind_match,]
+
+rownames(lungdat_filt) <- gtab_filt$gene_clean
+```
+
+Intersecting GTEx data
+```{r}
+## Find shared genes
+shared_genes <- intersect(gtab_filt$gene_clean, rownames(counts_dat))
+
+## Intersect index
+ind_gtex <- gtab_filt$gene_clean %in% shared_genes
+lungdat_filt <- lungdat_filt[ind_gtex,]
+gtab_filt <- gtab_filt[ind_gtex,]
+
+
+ind_ipf <- rownames(counts_dat) %in% shared_genes
+counts_dat_filt <- counts_dat[ind_ipf,]
+gene_dat_filt <- gene_dat[ind_ipf,]
+
+## Order them so they all match
+
+## Gtex
+ind_gtex_order <- match(gtab_filt$gene_clean, rownames(counts_dat_filt)) 
+gtab_filt <- gtab_filt[ind_gtex_order,]
+lungdat_filt <- lungdat_filt[ind_gtex_order,]
+
+## IPF
+ind_ipf_order <- match(rownames(counts_dat_filt), gtab_filt$gene_clean) 
+gene_dat_filt <- gene_dat_filt[ind_ipf_order,]
+counts_dat_filt <- counts_dat_filt[ind_ipf_order,]
+
+
+counts_df <- as.data.frame(counts_dat_filt) %>% rownames_to_column(var = "gene_id")
+lungdat_df <- as.data.frame(lungdat_filt)  %>% rownames_to_column(var = "gene_id")
+
+joined_df <- left_join(counts_df, lungdat_df)
+
+```
+
+Load in and make sample data
+```{r}
+
+## IPF data prepare
+samp_dat_sel <- samp_dat %>% select(SampleName, Batch, DiseaseStatus, Age, sex, tobacco)
+##GTEx prepare
+subject_dat  <-  read.csv("../global_in/gtex_phenotypes_v8.csv") %>%
+  mutate(Batch = 3, DiseaseStatus = "Normal", Age = AGE,
+         sex = ifelse(SEX==1, "M", "F"),
+         tobacco = ifelse(MHSMKSTS == "Yes", "Active smoker", "Never smoked")) %>%
+  select(SUBJID , Batch, DiseaseStatus, Age, sex,  tobacco) %>%
+  filter(SUBJID %in% pneum_keep$SUBJID)
+
+subject_dat <- select(left_join(subject_dat, lung_dict),
+       SampleName =  SAMPID,
+       Batch, DiseaseStatus, Age, sex, tobacco)
+
+samp_dat_join <- rbind(samp_dat_sel, subject_dat) %>%
+  mutate(study = as.factor(ifelse(Batch == 3, "GTEx", "UPenn")),
+         DiseaseStatus = as.factor(DiseaseStatus))
+
+```
+
+Order samples and genes
+```{r}
+## Sample ordering
+joined_df <- column_to_rownames(joined_df,var = "gene_id")
+
+joined_mat <- as.matrix(joined_df[,match(samp_dat_join$SampleName, colnames(joined_df))])
+
+
+## Gene ordering 
+joined_mat <- joined_mat[match(gene_dat_filt$ensembl, rownames(joined_mat)),]
+
+
+```
+
+
+
+Variance stabilizing transformation
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = joined_mat,
+                       colData = samp_dat_join,
+                       design = ~DiseaseStatus + Batch)
+
+lung_dis_VSD <- vst(dds)
+
+
+```
+
+Matrisome filtration
+```{r}
+#Filter down to core and ecm regulators
+
+mat_dat <- read.csv("../global_in/matrisome_hs_masterlist_EDIT_r.csv", fileEncoding="UTF-8-BOM", stringsAsFactors = F) %>%
+  filter(Division == "Core matrisome" | Category == "ECM Regulators" )
+# 
+# mat_ind <- (gtabMeanFiltered$GeneName %in% mat_dat$Gene.Symbol)
+# 
+# lung_mat_VST_filt <- lung_dis_VSDMeanFiltered[mat_ind,]
+# 
+# gtabMeanFiltered <-  gtabMeanFiltered[mat_ind,]
+
+```
+
+
+
+```{r}
+#Remove NA values
+
+
+vsdMeanFiltered <- lung_dis_VSD
+
+
+
+## heatmap of high variance genes
+library(gplots)
+#creating highvar subset
+
+#Remove NA
+#vsdHighVar <- vsdHighVar[(!(is.na(rownames(vsdHighVar)))),]
+
+norm_dat <- assay(vsdMeanFiltered)
+
+
+
+norm_centered <- norm_dat - rowMeans(norm_dat)
+
+```
+
+
+```{r}
+clusters_df <- read.csv("data_out/lung_diss-gene-clusters-high-variance.csv")[,-1]
+ind <- gene_dat_filt$GeneName %in% c(clusters_df$A.1, clusters_df$A.2)
+
+gene_final <- gene_dat_filt[ind,]
+norm_cent_filt <- norm_centered[ind,]
+rownames(norm_cent_filt) <- gene_final$GeneName
+```
+
+
+
+
+
+
+Trying with pheatmap
+```{r}
+## add sample specific data
+samp_phen <- select(samp_dat_join, DiseaseStatus, SampleName, Age, sex, tobacco, Batch) %>%
+  mutate(sex = ifelse(sex == "M", "Male", "Female"),
+         #Batch = as.character(Batch),
+         ## Changing Batch number to author or gtex
+         Batch = case_when(
+          Batch == 1 ~  "Sivakumar-1",
+          Batch == 2 ~  "Sivakumar-2",
+          Batch == 3 ~  "GTEx"
+         ),
+         DiseaseStatus = as.character(DiseaseStatus),
+         DiseaseStatus = case_when(
+           str_detect(SampleName, "_") ~ DiseaseStatus,
+           SampleName %in% pneum_dat_0$SAMPID ~ "Normal",
+           SampleName %in% pneum_dat_g0$SAMPID ~ "Ventilator Injury"
+         ))
+## add disease
+#sel_prof <- select(profiles, SampleName, disease)
+#samp_phen <- left_join(samp_phen, sel_prof)
+#Prepare data for pheatmap
+rownames(samp_phen) <- samp_phen$SampleName
+samp_rownames <- samp_phen$SampleName
+samp_phen <- select(samp_phen, -SampleName)
+#make batch factor
+samp_phen <- mutate(samp_phen, Batch = factor(Batch))
+
+#####################
+
+#######
+
+age <- samp_phen$Age 
+
+samp_phen$Age <- case_when(
+  1 <= age & age <= 19 ~ "1-19",
+  20 <= age & age <= 29 ~ "20-29",
+  30 <= age & age <= 39 ~ "30-39",
+  40 <= age & age <= 49 ~ "40-49",
+  50 <= age & age <= 59 ~ "50-59",
+  60 <= age & age <= 69 ~ "60-69",
+  70 <= age & age <= 80 ~ "70-80"
+  )
+
+
+## Make anno-mat
+
+anno_mat <- reshape2::melt(clusters_df, measure.vars = c("A.1", "A.2")) %>%
+  rename(variable = "Cluster", value = "Gene.Symbol") %>%
+  mutate(Cluster = gsub("[.]", "-", Cluster)) %>%
+  filter(Gene.Symbol != "")
+anno_mat <- left_join(anno_mat, mat_dat) %>% column_to_rownames("Gene.Symbol") %>%
+  select(Category, Cluster)
+
+
+
+
+###
+## Turning  gclusts into a melted dataframe
+# df_clusts <- as.data.frame(gclusts)[,-1]
+# df_clusts <- melt(df_clusts, measure.vars  = c("A-1", "A-2")) %>%
+#   filter(value != "")
+# rownames(df_clusts) <- df_clusts$value
+# anno_mat_2 <- merge(anno_mat_2, df_clusts, by =0 )
+# anno_mat_2 <- anno_mat_2 %>%
+#   column_to_rownames(var="Row.names") %>%
+#   select(Cluster = variable,Category)
+#Anno colors as a list
+new_colors <- list()
+##Disease
+dis_color <- c("#570094","#724C93", "#9E84C1", "#E0D0F4")
+ord_dis <- unique(samp_phen$DiseaseStatus)[c(3,1,4,2)]
+names(dis_color) <- ord_dis
+
+new_colors$DiseaseStatus <- dis_color
+## Adding age
+age_color <- brewer.pal(7, "YlOrRd")
+ord_age <- unique(samp_phen$Age)[c(5,4,6,1,7,3,2)]
+names(age_color) <- ord_age
+
+new_colors$Age <- age_color
+## Adding smoking
+smoking_color <- c(rev(brewer.pal(3, "Greys")), "white")
+ord_smoke <- unique(samp_phen$tobacco)[c(4,2,1,3)]
+names(smoking_color) <- ord_smoke
+new_colors$tobacco <- smoking_color
+## Adding race colors
+# race_colors <- brewer.pal(4, "Dark2")
+# ord_race <- unique(samp_phen$race)[c(2,1,3,4)]
+# names(race_colors) <- ord_race
+# new_colors$race <- race_colors
+##5 and 3 for clusters
+clust_colors <- c(brewer.pal(6, "Set1")[c(5)], "#F7D8BC")
+ord_clust <- c("A-1", "A-2")
+names(clust_colors) <- ord_clust
+new_colors$Cluster <- clust_colors
+#Gender
+gender_colors <- c("#8DD6EA", brewer.pal(11, "RdYlBu")[c(10)])
+ord_gender <- c("Female", "Male")
+names(gender_colors) <- ord_gender
+new_colors$sex <- gender_colors
+#Batch
+batch_colors <- c("#AAE8C7", "#55B783", "springgreen4")
+ord_batch <- c("Sivakumar-1", "Sivakumar-2", "GTEx")
+names(batch_colors) <- ord_batch
+new_colors$Batch <- batch_colors
+
+## Adding Category
+cat_colors <-  c("#E66100","#5D3A9B",  "#E1BE6A",  "#994F00")
+ord_cat <- unique(anno_mat$Category)[c(2,3,1,4)]
+names(cat_colors) <- ord_cat
+new_colors$Category <- cat_colors
+
+#Selector
+
+rownames(samp_phen) <- samp_rownames
+#anno_mat_2 <- select(anno_mat_2, Category, Cluster)
+
+final_pheat <- pheatmap(norm_cent_filt,
+         annotation_col = samp_phen,
+         annotation_row = anno_mat,
+         show_colnames = F,
+         annotation_colors = new_colors,
+         border_color = NA,
+        filename="data_out/lung_ipf_sample_cluster_gtex.pdf",
+         width = 12,
+         height = 8
+         )
+```
+
+Clustering data to check cluster validity
+```{r}
+plot(final_pheat$tree_col)
+
+dendo_cut <- cutree(final_pheat$tree_col, 3)
+
+table(dendo_cut)
+
+
+barplot(diff(final_pheat$tree_col$height) # show the number of cluster below each bars
+)
+
+samp_phen_2 <- cbind(samp_phen, factor(dendo_cut))
+
+colnames(samp_phen_2)[ncol(samp_phen_2)] <- "Sample Cluster"
+
+
+
+final_pheat_2 <- pheatmap(norm_cent_filt,
+         annotation_col = samp_phen_2,
+         annotation_row = anno_mat,
+         show_colnames = F,
+         annotation_colors = new_colors,
+         border_color = NA,
+        filename="data_out/lung_ipf_sample_cluster_gtex_2.pdf",
+         width = 12,
+         height = 8
+         )
+
+```
+
+
+Make cluster profiles again
+```{r}
+clusterProfiles <- matrix(nrow=ncol(norm_cent_filt), ncol=(ncol(clusters_df)))
+for(k in 1:ncol(clusterProfiles)){
+  # ind <- which(cnamesClust == LETTERS[k])
+  
+  #New code picks from gclusts
+  ind <- rownames(norm_cent_filt) %in%  clusters_df[,k]
+  
+  #FOr normal clusters 
+  if (length(unique(clusters_df[,k])) != 2) {
+    
+    etmp <- norm_cent_filt[ind,]
+    ztmp <- etmp / apply(etmp, 1, mad)
+    #Below removes inf values
+    ztmp <- ztmp[is.finite(rowSums(ztmp)),]
+    
+    clusterProfiles[,k] <- colMeans(ztmp)
+  } else {
+    #For single genes such as XIST
+    etmp <- norm_cent_filt[ind,]
+    clusterProfiles[,k] <- etmp
+    
+    
+  }
+  
+  
+  
+  
+}
+rownames(clusterProfiles) <- colnames(norm_cent_filt)
+colnames(clusterProfiles) <- colnames((clusters_df))
+
+head(clusterProfiles)
+
+```
+
+
+```{r}
+analysis_df <- cbind(cbind(samp_dat_join, factor(dendo_cut)), clusterProfiles) %>%
+  rename(`factor(dendo_cut)` = "samp_clust") %>%
+  mutate(sex = ifelse(sex == "M", "Male", "Female"),
+         Batch = as.character(Batch),
+         DiseaseStatus = as.character(DiseaseStatus),
+         DiseaseStatus = case_when(
+           str_detect(SampleName, "_") ~ DiseaseStatus,
+           SampleName %in% pneum_dat_0$SAMPID ~ "Normal",
+           SampleName %in% pneum_dat_g0$SAMPID ~ "Ventilator Injury"
+         ),
+         DiseaseStatus = factor(DiseaseStatus, c("Normal", "Ventilator Injury", "ALI", "IPF")),
+         ipf_tf = ifelse(DiseaseStatus == "IPF", TRUE, FALSE))
+
+table(analysis_df$samp_clust, analysis_df$DiseaseStatus)
+
+a1_Summ <- summary(lm(A.1 ~ DiseaseStatus + Batch + Age  + sex + tobacco,
+           data = analysis_df))
+a1_Summ$coefficients
+
+summary(lm(A.2 ~ DiseaseStatus + Batch + Age  + sex + tobacco,
+           data = analysis_df))
+
+colnames(analysis_df)
+
+log_model <- glm(ipf_tf ~ samp_clust, data = analysis_df, family = "binomial")
+
+log_model_summ <- summary(log_model)
+
+exp(log_model_summ$coefficients)
+
+exp(cbind(OR = coef(log_model), confint(log_model)))
+
+summary(glm(ipf_tf ~ Age + tobacco + sex + Batch, data = analysis_df, family = "binomial"))
+```
+
+Remake figure six with new data
+```{r, width =4}
+library(ggforce)
+
+melt_analysis <- reshape2::melt(analysis_df, measure.vars = c("A.1", "A.2")) %>%
+  mutate(DiseaseStatus = factor(DiseaseStatus, c("IPF", "ALI", "Ventilator Injury", "Normal")))
+
+ggplot(melt_analysis, aes(DiseaseStatus, value)) +
+  geom_violin(aes(fill = DiseaseStatus)) +
+  scale_fill_manual(values = c("#570094","#724C93", "#9E84C1", "#E0D0F4")) +
+  guides(fill = FALSE) +
+  geom_sina(aes(color = Batch)) + 
+  scale_color_manual(values = c("#AAE8C7", "#55B783", "springgreen4")) + 
+  facet_grid(~variable) +
+  stat_n_text() +
+  xlab("Disease Status") +
+  ylab("Cluster Z-Score") +
+  theme_classic() +
+    theme(axis.text.x = element_text(angle = 80, vjust = .5))
+
+ggsave("data_out/gtex_cluster_violin.pdf", width = 7, height = 12)
+```
+
+
+

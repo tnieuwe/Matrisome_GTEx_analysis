@@ -1,0 +1,788 @@
+---
+title: "GSE134692 Analysis"
+author: "Tim Nieuwenhuis"
+date: "4/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DESeq2)
+library(tidyverse)
+library(recount)
+library(viridis)
+library(EnvStats)
+library(GMD)
+library(fields)
+library(viridis)
+#matrisome_dat <- read.csv("matrisome_hs_masterlist_EDIT_r.csv")
+
+#colnames(matrisome_dat)[1] <- "Division"
+
+#matrisome_dat <- matrisome_dat %>% filter(Division == "Core matrisome" | Category == "ECM Regulators")
+
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+samp_dat <- read.table("data_in/GSE134692_design.txt", header = T, fill = T, sep = "\t")
+
+gene_dat <- read.table("data_in/GSE134692_gene_annotation.txt", header = T,"\t")
+
+counts_dat <- read.table("data_in/GSE134692_raw_counts.txt", header = T, row.names = 1, sep = "\t")
+
+colnames(counts_dat) <- samp_dat$SampleName
+
+#Round to numbers
+#round(counts_dat)[10:10,10:10][5:10,5:10]
+
+#(counts_dat)[5:10,5:10]
+
+counts_dat <- round(counts_dat)
+
+```
+
+Check for normal gene expressions
+```{r}
+genes_of_int <- c("PRSS1", "PRL", "CELA3A", "GAPDH")
+
+ind <- gene_dat$GeneName %in% genes_of_int
+
+counts_dat[ind,]
+```
+
+#McCall Pipeline
+
+Variance stabilizing transformation
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = counts_dat,
+                       colData = samp_dat,
+                       design = ~DiseaseStatus)
+
+lung_dis_VSD <- vst(dds)
+
+#Filter out lowley expressed genes
+m <- rowMeans(assay(lung_dis_VSD))
+hist(m, breaks=25, main="", xlab="Normalized transformed counts")
+
+ind <- which(m>5)
+lung_dis_VSDMeanFiltered <- lung_dis_VSD[ind,]
+
+gtabMeanFiltered <- gene_dat[ind,]
+```
+
+Matrisome filtration
+```{r}
+#Filter down to core and ecm regulators
+
+mat_dat <- read.csv("../global_in/matrisome_hs_masterlist_EDIT_r.csv", fileEncoding="UTF-8-BOM", stringsAsFactors = F) %>%
+  filter(Division == "Core matrisome" | Category == "ECM Regulators" ) 
+
+mat_ind <- (gtabMeanFiltered$GeneName %in% mat_dat$Gene.Symbol)
+
+lung_mat_VST_filt <- lung_dis_VSDMeanFiltered[mat_ind,]
+
+gtabMeanFiltered <-  gtabMeanFiltered[mat_ind,]
+
+```
+
+
+
+```{r}
+#Remove NA values
+
+#Below code doesn't work due to stupid naming, must remove NAs later in data
+# ind <- is.na(unlist(gtabMeanFiltered$symbol, use.names = F))
+# 
+# gtabMeanFiltered <- gtabMeanFiltered[ind,]
+# lung_dis_VSDMeanFiltered <- lung_dis_VSDMeanFiltered[ind,]
+####Cluster 
+vsdMeanFiltered <- lung_mat_VST_filt
+
+v <- apply(assay(vsdMeanFiltered),1,var)
+ind <- which(v > 2)
+
+
+## heatmap of high variance genes
+library(gplots)
+#creating highvar subset
+vsdHighVar <- assay(vsdMeanFiltered)[ind,]
+rownames(vsdHighVar) <- unlist(gtabMeanFiltered$GeneName, use.names = F)[ind]
+colnames(vsdHighVar) <- colnames(lung_mat_VST_filt)
+#Remove NA
+vsdHighVar <- vsdHighVar[(!(is.na(rownames(vsdHighVar)))),]
+
+
+
+
+colnames(vsdHighVar) <- vsdMeanFiltered$SampleName
+vsdHighVarCentered <- vsdHighVar - rowMeans(vsdHighVar)
+pdf("data_out/lung_diss-high-variance-heatmap.pdf", width=8, height=8)
+hm <- heatmap.2(vsdHighVarCentered, trace="none",col=bluered(20), 
+                scale="row", margins=c(4,4), cexCol=0.25, cexRow=0.25,
+                density.info="histogram",key.title="")
+#dev.off()
+
+## correlation between high variance genes
+library("pheatmap")
+library("RColorBrewer")
+
+#Removing duplicated genes, Tim code
+dim(vsdHighVar)
+vsdHighVar <-  vsdHighVar[!(duplicated(rownames(vsdHighVar))),]
+dim(vsdHighVar)
+
+#Gcor is correlations between each genes
+gcor <- cor(t(vsdHighVar), method="kendall")
+
+## critical value
+#library(pvrank)
+library(SuppDists)
+ngene <- nrow(vsdHighVar)
+nsamp <- ncol(vsdHighVar)
+#tauCrit_old <- round(-qrank(0.01/((ngene^2)-ngene)/2, nsamp, index="kendall", approx = "gaussian")$Cq, 2)
+tauCrit <- round(qKendall(0.01/((ngene^2)-ngene)/2, nsamp, lower.tail = F), 2)
+
+## cluster based on absolute correlation distance
+dendo <- hclust(d=as.dist(1-abs(gcor)), method = "average")
+
+## clean up heatmap to focus on interesting gene clusters
+clusts <- cutree(dendo, h=1-tauCrit)
+tabclusts <- table(clusts)
+ind <- which(tabclusts >= 6) #arbitrary
+clusts[!(clusts %in% names(tabclusts)[ind])] <- 0
+ntmp <- names(clusts)
+clusts <- as.numeric(as.factor(clusts))-1
+names(clusts) <- ntmp
+
+## heatmap
+
+#Naming clusters based on their clust values
+#Very manual process
+n <- length(table(clusts))
+cnames <- rep("", length(clusts))
+
+#Tim for loop
+for (clst in 1:(n)){
+  cnames[clusts==clst] <- LETTERS[clst]
+}
+
+anno = data.frame("cluster"=factor(cnames))
+rownames(anno) = names(clusts)
+#anno_colors = list("cluster"=c("white", brewer.pal(n-1, "Spectral")))
+anno_colors = list("cluster"=c("white", brewer.pal(n-1, "Spectral")))
+names(anno_colors$cluster) <- c("", LETTERS[1:(n)-1])
+colors <- colorRampPalette( brewer.pal(11, "RdBu")[2:10] )(255)
+brks <- seq(0,2,length=length(colors)+1)
+
+chm <- pheatmap(1-gcor, col=colors, breaks=brks,
+                cluster_rows=dendo, cluster_col=dendo, 
+                legend_breaks=c(2,1.5,1,0.5,0), 
+                legend_labels=c("-1.0","-0.5","0","0.5","1.0"),
+                main="", fontsize=5, fontsize_row=3, fontsize_col=3,
+                
+                annotation_col = anno, annotation_row = anno, 
+                
+                annotation_colors = anno_colors,
+                border_color = NA,
+                filename="data_out/lung_diss-between-gene-correlation-high-variance-genes.pdf", 
+                width=10, height=8)
+#dev.off()
+
+## make matrix to output
+gclusts <- matrix("", nrow=max(table(cnames)), ncol=length(table(cnames)))
+colnames(gclusts) <- levels(anno$cluster)
+for(k in 1:length(table(cnames))){
+  tmp <- colnames(gclusts)[k]
+  gclusts[1:sum(cnames==tmp), k] <- rownames(gcor)[cnames==tmp]
+}
+
+
+#Sub clusters code! Now annotated
+
+for (column in LETTERS[1:(length(unique(cnames)) -1 )]) {
+  #Pull out the first column
+  test_col <- gclusts[,column]
+  first_gene <- test_col[1]
+  #Make an index to subset gcor to just a single clusters
+  ind <- which(rownames(gcor) %in% test_col)
+  sub_cor <- gcor[ind,ind]
+  #Test if the cluster has any negatively correlating genes
+  ind2 <- sub_cor[,first_gene] < 0
+  
+  #If there are negatively correlating genes...
+  if (sum(ind2) > 0) {
+    #generate sub cluster 1
+    sub_1 <- rownames(sub_cor)[!ind2]
+    #Subcluster 2
+    sub_2 <- rownames(sub_cor)[ind2]
+    
+    #Remover old column to replace with new columns
+    gclusts <- as.matrix(gclusts[,!(colnames(gclusts) == column)])
+    
+    
+    #nrow(gclusts) Not sure if useful, keeping for now
+    #add sub-columns
+    
+    #Make a single matrix of same rows as gclusts, one for each sub-cluster. 
+    matrix_1  <- as.matrix(c(sub_1 ,rep("", nrow(gclusts) - length(sub_1))), )
+    colnames(matrix_1) <- paste0(column,"-1")
+    
+    # cbind(gclusts, matrix_1, matrix_2)
+    
+    
+    matrix_2  <- as.matrix(c(sub_2 ,rep("", nrow(gclusts) - length(sub_2))), )
+    colnames(matrix_2) <- paste0(column,"-2")
+    
+    #Add subclusters to gclusts
+    gclusts <-   cbind(gclusts, matrix_1, matrix_2)
+    
+  }
+  
+  
+}
+
+
+
+#Realphebatize columns for sake of beauty 
+gclusts <- gclusts[,order(colnames(gclusts))]
+
+
+
+write.csv(gclusts, file="data_out/lung_diss-gene-clusters-high-variance.csv",
+          quote=FALSE, row.names=FALSE)
+
+##############
+
+## stratify data by inclusion in clusters 
+ind <- which(rownames(vsdHighVar) %in% rownames(gcor)[clusts>0])
+vsdHighVarClust <- vsdHighVar[ind,]
+vsdHighVarCenteredClust <- vsdHighVarCentered[ind,]
+vsdHighVarNoise <- vsdHighVar[-ind,]
+
+gcorClust <- gcor[ind,ind]
+dendoClust <- hclust(d=as.dist(1-abs(gcorClust)), method = "average")
+cnamesClust <- cnames[ind]
+
+## clusters A-H
+n <- length(table(cnamesClust))
+anno = data.frame("cluster"=factor(cnamesClust))
+rownames(anno) = rownames(vsdHighVarClust)
+anno_colors = list("cluster"=brewer.pal(n, "Spectral"))
+names(anno_colors$cluster) <- LETTERS[1:n]
+colors <- colorRampPalette( brewer.pal(11, "RdBu")[2:10] )(255)
+brks <- seq(0,2,length=length(colors)+1)
+chm <- pheatmap(1-gcorClust, col=colors, breaks=brks,
+                cluster_rows=dendoClust, cluster_col=dendoClust, 
+                legend_breaks=c(2,1.5,1,0.5,0), 
+                legend_labels=c("-1.0","-0.5","0","0.5","1.0"),
+                main="", fontsize=9, #fontsize_row=3, fontsize_col=3,
+                annotation_col = anno, annotation_row = anno, 
+                annotation_colors = anno_colors,
+                border_color = NA,
+                filename="data_out/lung_diss-between-gene-correlation-high-variance-genes-clean.pdf", 
+                width=10, height=8)
+#dev.off()
+
+## remake with non A-H genes
+gcorNoise <- gcor[-ind,-ind]
+dendoNoise <- hclust(d=as.dist(1-abs(gcorNoise)), method = "average")
+
+colors <- colorRampPalette( brewer.pal(11, "RdBu")[2:10] )(255)
+brks <- seq(0,2,length=length(colors)+1)
+chm <- pheatmap(1-gcorNoise, col=colors, breaks=brks,
+                cluster_rows=dendoNoise, cluster_col=dendoNoise, 
+                legend_breaks=c(2,1.5,1,0.5,0), 
+                legend_labels=c("-1.0","-0.5","0","0.5","1.0"),
+                main="", fontsize=10, fontsize_row=10, fontsize_col=10,
+                border_color = NA,
+                filename="data_out/lung_diss-between-gene-correlation-high-variance-genes-noise.pdf", 
+                width=10, height=8)
+#dev.off()
+
+
+
+
+#########################################
+
+## compute avg cluster expression for each sample
+#load(file="data_out/lung_diss-high-variance-gene-data.rda")
+
+## extract expression for each cluster, convert to zscores, and summarize profile
+clusterProfiles <- matrix(nrow=ncol(vsdHighVarCenteredClust), ncol=(ncol(gclusts) - 1))
+for(k in 1:ncol(clusterProfiles)){
+  # ind <- which(cnamesClust == LETTERS[k])
+  
+  #New code picks from gclusts
+  ind <- rownames(vsdHighVarCenteredClust) %in%  gclusts[,1 + k]
+  
+  #FOr normal clusters 
+  if (length(unique(gclusts[,1 + k])) != 2) {
+    
+    etmp <- vsdHighVarCenteredClust[ind,]
+    ztmp <- etmp / apply(etmp, 1, mad)
+    #Below removes inf values
+    ztmp <- ztmp[is.finite(rowSums(ztmp)),]
+    
+    clusterProfiles[,k] <- colMeans(ztmp)
+  } else {
+    #For single genes such as XIST
+    etmp <- vsdHighVarCenteredClust[ind,]
+    clusterProfiles[,k] <- etmp
+    
+    
+  }
+  
+  
+  
+  
+}
+rownames(clusterProfiles) <- colnames(vsdHighVarCenteredClust)
+colnames(clusterProfiles) <- colnames((gclusts))[-1]
+
+write.csv(clusterProfiles, file="data_out/lung_dis_profile.csv", quote=FALSE)
+
+
+```
+
+```{r}
+library(reshape2)
+
+clusterProfiles <-  as.data.frame(clusterProfiles)
+
+rownames(clusterProfiles) <- samp_dat$SampleName
+
+clusterProfiles$SampleName <- samp_dat$SampleName
+
+clusterProfiles$disease <- samp_dat$DiseaseStatus
+
+
+profiles <- left_join(clusterProfiles, samp_dat)
+
+# 
+# clusterProfiles$disease <- samp_dat$tobacco
+# 
+# clusterProfiles$disease <- samp_dat$tobacc
+
+profiles <- profiles %>% select(SampleName, disease, everything()) %>%
+  mutate(Batch = factor(Batch),
+         disease = factor(disease, c("Normal", "ALI", "IPF")))
+
+
+profiles$disease_tf <- !(profiles$disease == "Normal")
+
+
+t.test(`A-1`~disease_tf, data= profiles)
+
+
+a1_lm <- lm(`A-1` ~ disease + Batch + Age + race + sex + tobacco,
+            data =  profiles)
+
+summary(a1_lm)
+
+
+a2_lm <- lm(`A-2` ~ disease + Batch + Age + race + sex + tobacco,
+            data =  profiles)
+
+summary(a2_lm)
+
+
+ggplot(profiles, aes(x = disease, y = `A-1`)) + geom_violin(aes(fill = disease)) +
+  geom_jitter() +
+  labs(title = "GSE13469 Cluster A-1 vs Disease State",
+       subtitle = "IPF = Idiopathic Pulmonary Fibrosis, ALI = Acute Lung Injury")
+
+
+
+t.test(`A-2`~disease_tf, data= profiles)
+ggplot(profiles, aes(x = disease, y = `A-2`)) +
+  geom_violin(aes(fill = disease)) +
+  geom_jitter() +
+  labs(title = "GSE13469 Cluster A-2 vs Disease State",
+       subtitle = "IPF = Idiopathic Pulmonary Fibrosis, ALI = Acute Lung Injury") 
+
+melt_prof <- melt(profiles)
+
+melt_prof <- filter(melt_prof, !(variable %in% c("weight", "height", "Age")))
+
+p <- ggplot(melt_prof, aes(x = disease, y = value)) +
+  geom_violin(aes(fill = disease)) + 
+  geom_jitter(color = "grey60", fill = "black", width = .3) + facet_wrap(~variable) +
+  labs(title = "GSE13469 Cluster A-1 and A-2 against Disease State",
+       subtitle = "IPF = Idiopathic Pulmonary Fibrosis, ALI = Acute Lung Injury") +
+  ylab("Z-score of Cluster") +
+  xlab("Tissue State") +
+ # annotate("text", x = 2, y = 1, label = "test")
+  scale_fill_viridis_d() +
+  stat_n_text() +
+  theme_bw()
+p
+ggsave("profiles_vs_disease.pdf", width = 8,height = 6)
+
+
+```
+Testing correlations against single cell paper
+
+```{r}
+dim(assay(vsdMeanFiltered))
+
+dim(gtabMeanFiltered)
+
+
+dat <- assay(vsdMeanFiltered)
+
+rownames(dat) <- gtabMeanFiltered$GeneName
+
+
+
+cor.test(dat["TNC",], dat["CTHRC1",])
+cor.test(dat["POSTN",], dat["CTHRC1",])
+cor.test(dat["COL3A1",], dat["CTHRC1",])
+cor.test(dat["SPP1",], dat["CTHRC1",])
+cor.test(dat["VTN",], dat["CTHRC1",])
+cor.test(dat["VTN",], dat["COL1A1",])
+
+plot(dat["COL1A1",], dat["CTHRC1",])
+
+#add ACTA2
+
+``` 
+
+```{r}
+gene_df <- as.data.frame(t(dat))
+ gene_df <- gene_df %>% rownames_to_column(var = "sample")
+gene_df <- gene_df  %>%
+  mutate(disease = ifelse(str_detect(sample,"ALI"), "ALI",
+  ifelse(str_detect(sample,"IPF"), "IPF", "control")),
+  disease_tf = ifelse(str_detect(sample, "IPF"), T, F)) %>%
+  select(sample, disease, everything())
+
+t.test(MMP9~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = MMP9)) + geom_violin() + geom_jitter(width = .25, height = 0)
+t.test(MMP12~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = MMP12)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+
+t.test(ADIPOQ~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = ADIPOQ)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+
+t.test(VWA3B~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = VWA3B)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+t.test(CTSE~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = CTSE)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+t.test(HMCN1~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = HMCN1)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+t.test(ADAMTS4~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = ADAMTS4)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+t.test(ESM1~disease_tf, data= gene_df)
+ggplot(gene_df, aes(x= disease, y = ESM1)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+```
+
+
+```{r}
+## add sample specific data
+samp_phen <- select(samp_dat, SampleName, Age, race, gender, sex, tobacco)
+
+#####################
+
+
+
+
+#Join samp specific data
+map <- match(colnames(vsdHighVarClust),samp_phen$SampleName)
+identical(colnames(vsdHighVarClust),samp_phen$SampleName[map])
+samp_phen <- samp_phen[map,] 
+
+gender <- samp_phen$gender[map]
+age <- samp_phen$Age[map]
+race <- samp_phen$race[map]
+tobacco <- samp_phen$tobacco[map]
+
+  ##Generate colors for sample dat----
+ ## Bin AGES
+age <- case_when(
+  1 <= age & age <= 19 ~ "1-19",
+  20 <= age & age <= 29 ~ "20-29",
+  30 <= age & age <= 39 ~ "30-39",
+  40 <= age & age <= 49 ~ "40-49",
+  50 <= age & age <= 59 ~ "50-59",
+  60 <= age & age <= 69 ~ "60-69",
+  70 <= age & age <= 80 ~ "70-80"
+  )
+  ##With bin
+  age_color <- brewer.pal(6, "Oranges")
+  
+  age_df <- as.data.frame(cbind(c("1-19", "20-29", "30-39", "40-49", "50-59", "60-69","70-80"), age_color ))
+  
+  colnames(age_df) <- c("age","color")
+  age <- as.data.frame(age, stringsAsFactors = FALSE)
+  #bin
+  
+  age_full <- left_join(age, age_df)
+
+  #Bin race
+   race_colors <- brewer.pal(4, "Dark2")
+race <- case_when(
+  race == "Caucasian" ~ race_colors[1],
+  race == "African American" ~ race_colors[2],
+  race == "Other" ~ race_colors[3],
+  race == "Unknown" ~ race_colors[4]
+  )
+
+  ## Color gender 
+gender <- ifelse(gender == "Male", "cornflowerblue", "firebrick2")
+  ## Color tobacco
+tobacco <- case_when(
+  tobacco == "Never smoked" ~ "gray87",
+  tobacco == "Former smoker" ~ "gray48",
+  tobacco == "Active smoker" ~ "gray20",
+  tobacco == "Unknown" ~ "darkslateblue"
+)
+
+map3_anno <- anno
+map3_anno <- rownames_to_column(anno, var = "gene")
+
+
+map3_color <- as.data.frame(anno_colors)
+rownames(map3_color) <- c("A","B","C")
+colnames(map3_color) <- "color"
+map3_color <- rownames_to_column(map3_color, var = "cluster")
+#Make matrisome labels for map3
+#Anno 2 variance
+gene_4_anno <- rownames(anno)
+gene_4_anno <- as.data.frame(gene_4_anno)
+colnames(gene_4_anno) <- "Gene.Symbol"
+
+#Generating colors to be used and data frame required to be added into rlab
+colors <- as.data.frame(cbind(c("Matrisome-associated","Core matrisome"), (RColorBrewer::brewer.pal(3, "Paired")[-3])))
+colnames(colors) <- c("category", "Category")
+anno_mat <- left_join(gene_4_anno, mat_dat) %>%
+  left_join( colors)
+anno_mat <- anno_mat %>% select(Gene.Symbol, Category)
+colnames(anno_mat)[1] <- "gene"
+
+map3_full <- left_join(map3_anno, map3_color) %>% left_join(anno_mat)
+map3_full <- map3_full[order(map3_full$cluster, decreasing = T),]
+
+
+
+
+
+
+## heatmap with sample annotation
+library(gplots)
+library(fields)
+library(GMD)
+library("devtools")
+source_url("https://raw.githubusercontent.com/obigriffith/biostar-tutorials/master/Heatmaps/heatmap.3.R")
+
+#source("heatmap.3.R")
+clab <- cbind(age_df$color,
+              gender,
+              race,
+              tobacco)
+colnames(clab) <- c("Age", "Sex", "Race", "Smoking History")
+
+
+map3_full <- select(map3_full, color, Category) 
+#rlab <- t(as.matrix(map3_full$color))
+rlab <- t(as.matrix(map3_full))
+
+pdf("file_lung-mat-high-var-heatmap-clean-subj-info.pdf", width=20, height=30)
+hm3 <- GMD::heatmap.3(vsdHighVarCenteredClust[order(cnamesClust, decreasing = TRUE),], 
+                 Rowv=NA,
+                 trace="none",
+                 scale="none", 
+                 margins=c(2,12), labCol=NA, labRow=NA,
+                 density.info="none",
+                 KeyValueName="Residuals",
+                 keysize=1,
+                 xlab="Adipose - Subcutaneous Samples",
+                 ylab="",
+                 dendrogram="none",
+                 sidesize=4, 
+                 ColSideColors=clab, ColSideColorsSize=4,
+                 RowSideColors = rlab
+                 #add.exprs=mtext(side=2,paste("Cluster", LETTERS[1:8]), at=c(0.15,0.47,0.68,0.8,0.88,0.95,1.01),line=2, las=2)
+)
+
+
+
+legend(x=0.86,y=0.97,c("Ventilator","Violent","Natural"), title="Death",
+       fill=c("dark green","green","light green"), border=FALSE, bty="n", cex=1)
+legend(x=0.86,y=0.81,c("Female","Male"), title="Gender",
+       fill=c("black","grey"), border=FALSE, bty="n", cex=1)
+legend(x=0.86,y=0.68,c("06/27/11","","09/12/13","","01/28/14"), title="Date",
+       fill=rep("white",5), border=FALSE, bty="n", cex=1)
+legend(x=0.86,y=0.45,c("3.2","","7.0","","9.4"), title="  RIN",
+       fill=rep("white",5), border=FALSE, bty="n", cex=1)
+
+#Tim added cluster bar
+
+legend(x=0.86,y=0.22,c("20-39", "40-49", "50-59", "60-69","70-79"), title="Age",
+       fill=age_color, border=FALSE, bty="n", cex=1)
+
+legend(x=0.01,y=0.5,map3_color$cluster, title="Cluster",
+       fill=as.character(map3_color$color), border=FALSE, bty="n", cex=1)
+
+legend(x=0.01,y=0.3,c("Core","Assoc"), title="Matrisome",
+       fill=c("#1F78B4","#A6CEE3"), border=FALSE, bty="n", cex=1)
+#dev.off()
+
+
+save(vsdHighVar, vsdHighVarCentered, vsdHighVarClust, vsdHighVarNoise, 
+     vsdHighVarCenteredClust, cnames, cnamesClust,
+     file="ipf_lung-high-variance-gene-data-mat.rda")
+
+
+
+```
+
+Trying with pheatmap
+```{r}
+## add sample specific data
+samp_phen <- select(samp_dat, SampleName, Age, race, gender, tobacco, Batch)
+## add disease
+sel_prof <- select(profiles, SampleName, disease)
+samp_phen <- left_join(samp_phen, sel_prof)
+#Prepare data for pheatmap
+rownames(samp_phen) <- samp_phen$SampleName
+samp_rownames <- samp_phen$SampleName
+samp_phen <- select(samp_phen, -SampleName)
+#make batch factor
+samp_phen <- mutate(samp_phen, Batch = factor(Batch))
+
+#####################
+
+#######
+
+age <- samp_phen$Age 
+
+samp_phen$Age <- case_when(
+  1 <= age & age <= 19 ~ "1-19",
+  20 <= age & age <= 29 ~ "20-29",
+  30 <= age & age <= 39 ~ "30-39",
+  40 <= age & age <= 49 ~ "40-49",
+  50 <= age & age <= 59 ~ "50-59",
+  60 <= age & age <= 69 ~ "60-69",
+  70 <= age & age <= 80 ~ "70-80"
+  )
+
+
+anno_mat_2 <- select(anno_mat, Category)
+rownames(anno_mat_2) <- anno_mat$gene
+###
+## Turning  gclusts into a melted dataframe
+df_clusts <- as.data.frame(gclusts)[,-1]
+df_clusts <- melt(df_clusts, measure.vars  = c("A-1", "A-2")) %>%
+  filter(value != "")
+rownames(df_clusts) <- df_clusts$value
+anno_mat_2 <- merge(anno_mat_2, df_clusts, by =0 )
+anno_mat_2 <- anno_mat_2 %>%
+  column_to_rownames(var="Row.names") %>%
+  select(Cluster = variable,Category)
+#Anno colors as a list
+new_colors <- list()
+##Disease
+dis_color <- viridis_pal(option = "C")(10)[c(1, 5, 9)]
+ord_dis <- unique(samp_phen$disease)[c(3,1,2)]
+names(dis_color) <- ord_dis
+
+new_colors$disease <- dis_color
+## Adding age
+age_color <- brewer.pal(7, "YlOrRd")
+ord_age <- unique(samp_phen$Age)[c(5,4,6,1,7,3,2)]
+names(age_color) <- ord_age
+
+new_colors$Age <- age_color
+## Adding smoking
+smoking_color <- c(rev(brewer.pal(3, "Greys")), "darkslateblue")
+ord_smoke <- unique(samp_phen$tobacco)[c(4,2,1,3)]
+names(smoking_color) <- ord_smoke
+new_colors$tobacco <- smoking_color
+## Adding race colors
+race_colors <- brewer.pal(4, "Dark2")
+ord_race <- unique(samp_phen$race)[c(2,1,3,4)]
+names(race_colors) <- ord_race
+new_colors$race <- race_colors
+##5 and 3 for clusters
+clust_colors <- brewer.pal(6, "Set1")[c(5,3)]
+ord_clust <- c("A-1", "A-2")
+names(clust_colors) <- ord_clust
+new_colors$Cluster <- clust_colors
+#Gender
+gender_colors <- brewer.pal(11, "RdYlBu")[c(2,10)]
+ord_gender <- c("Female", "Male")
+names(gender_colors) <- ord_gender
+new_colors$gender <- gender_colors
+#Batch
+batch_colors <- brewer.pal(11, "RdYlBu")[c(2,10)]
+ord_batch <- c("1", "2")
+names(batch_colors) <- ord_batch
+new_colors$Batch <- batch_colors
+
+## Adding Category
+cat_colors <-  c("#E66100","#5D3A9B",  "#E1BE6A",  "#994F00")
+ord_cat <- unique(anno_mat_2$Category)[c(2,3,1,4)]
+names(cat_colors) <- ord_cat
+new_colors$Category <- cat_colors
+
+#Selector
+samp_phen <- select(samp_phen, -race, -gender, )
+rownames(samp_phen) <- samp_rownames
+anno_mat_2 <- select(anno_mat_2, Category, Cluster)
+
+pheatmap(vsdHighVarCenteredClust[order(cnamesClust, decreasing = TRUE),],
+         annotation_col = samp_phen,
+         annotation_row = anno_mat_2,
+         show_colnames = F,
+         annotation_colors = new_colors,
+         border_color = NA,
+        filename="data_out/lung_ipf_sample_cluster.pdf",
+         width = 12,
+         height = 8
+         )
+```
+
+
+Single cell compare
+```{r}
+sc_dat <- read.table("data_in/aba1983_Data_S8.txt")
+
+sc_dat_filt <- filter(sc_dat, gene %in% df_clusts$value)
+#View(sc_dat_filt)
+
+### Genes they have that we don't
+gene_df$disease <- factor(gene_df$disease, levels = c("control", "ALI", "IPF"))
+
+
+summary(lm(LAMB3~disease, data= gene_df))
+ggplot(gene_df, aes(x= disease, y = LAMB3)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+summary(lm(LAMC2~disease, data= gene_df))
+ggplot(gene_df, aes(x= disease, y = LAMC2)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+summary(lm(FN1~disease, data= gene_df))
+ggplot(gene_df, aes(x= disease, y = FN1)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+
+summary(lm(TNC~disease, data= gene_df))
+ggplot(gene_df, aes(x= disease, y = TNC)) + geom_violin() + geom_jitter(width = .25, height = 0)
+
+```
+
+
+
+
