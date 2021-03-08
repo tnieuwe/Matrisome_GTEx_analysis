@@ -1,0 +1,345 @@
+---
+title: "esophagus analysis"
+author: "Tim Nieuwenhuis"
+date: "12/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggforce)
+library(tidyverse)
+library(reshape2)
+```
+
+```{r}
+## Figure out these pvalues
+tissue_temp <- "esophagus"
+
+# Version info: R 3.2.3, Biobase 2.30.0, GEOquery 2.40.0, limma 3.26.8
+################################################################
+#   Differential expression analysis with limma
+library(GEOquery)
+library(limma)
+library(umap)
+
+# load series and platform data from GEO
+
+gset <- getGEO("GSE161533", GSEMatrix =TRUE, AnnotGPL=FALSE)
+if (length(gset) > 1) idx <- grep("GPL13667", attr(gset, "names")) else idx <- 1
+gset <- gset[[idx]]
+features <- fData(gset)
+samples <- pData(gset)
+```
+
+So according to the data set the data has been preprocessed as follows:
+The Robust Multi-array Average (RMA) algorithm was used for data normalization through R and Bioconductor.
+
+```{r}
+## Getting a sense of the data structure
+hist(exprs(gset))
+hist(log2(exprs(gset)))
+
+## Need to log2 it
+exprs(gset) <- log2(exprs(gset))
+
+## Getting a sense of what data to include as batch
+head(samples)
+
+samples <- samples %>% rename(`age:ch1` = "age", `gender:ch1` = "gender", `tissue:ch1` = "tissue")
+
+```
+
+
+```{r}
+### Note, this experiment used 96 well plates, but gave not batch numbers :-/
+
+## Select useful batch elements for limma
+design_dat <-   select(samples,
+                   title,
+                   age,
+                   gender,
+                   tissue) %>%
+    mutate(age = as.numeric(age),
+           tissue = gsub(" ", "_", tissue))
+## Making the design matrix
+design <- model.matrix(~ 0 + tissue + age + gender, design_dat)
+
+fit <- lmFit(exprs(gset), design)
+#vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+## Making contrasts, basically allows me to see differences between the data types
+contr.matrix <- makeContrasts(
+    CancervsAdjacent = tissuetumor_tissue - tissueparatumor_tissue,
+    AdjacentvsNormal = tissueparatumor_tissue - tissuenormal_tissue,
+    CancervsNormal  = tissuetumor_tissue - tissuenormal_tissue,
+   levels = colnames(design))
+#contr.matrix
+#Fit the contrasts
+fit <- contrasts.fit(fit, contrasts=contr.matrix)
+## Comput statistics for fitted model
+efit <- eBayes(fit)
+
+
+## See hgow many up or downregulated genes there are, imo their are to many
+## But this appears to be the final data the website is reporting
+summary(decideTests(efit))
+
+
+
+# assumption is that most genes are not differentially expressed.
+tT2 <- topTable(efit, adjust="holm", sort.by="B", number=Inf)
+hist(tT2$adj.P.Val, col = "grey", border = "white", xlab = "P-adj",
+  ylab = "Number of genes", main = "P-adj value distribution")
+
+hist(tT2$P.Value, col = "grey", border = "white", xlab = "P-adj",
+  ylab = "Number of genes", main = "P-un-adj value distribution")
+
+## This section shows that the assumnption in this context fails to hold
+## There are far more significant genes than their should be, but again
+## this appears to be the data the website is based on
+
+```
+
+
+```{r}
+## Below I'm getting a sense of how to interact with the data before making a
+## proper function
+
+
+cov_pval = cbind(efit$coefficients, efit$p.value)
+colnames(cov_pval) <- c(paste0(colnames(cov_pval)[1:3], "_cov"),
+                        paste0(colnames(cov_pval)[1:3], "_pval"))
+
+cov_pval<- as.data.frame(cov_pval)
+
+cov_pval$genes <- features$`Gene Symbol`
+
+
+
+
+filter(cov_pval, genes %in% c("COL10A1", "MMP11", "COL11A1", "COMP", "SPP1"))
+
+
+##  Generating a function to explore limma data with genes names post limma
+## analysis
+head(efit)
+
+gene <- "MMP1"
+fit_vals <- efit
+
+post_limma_gene <- function(fit_vals, gene, sig_t_f = FALSE){
+    ### The purpose of this function is to pull gene data from the output of
+    ### limma() post eBayes(). This function specifically will pull gene data
+    ### on covariates and pvalues along with adjusting said pvalues. This 
+    ### function is made to be use with lapply() and is nested in the next fucntion
+    
+    ## Bind covariates and pvals together
+    cov_pval <- cbind(fit_vals$coefficients, fit_vals$p.value)
+    ## Make sure names fit covariates and pvals along with making data frane
+    colnames(cov_pval) <- c(paste0(colnames(cov_pval)[1:3], "_cov"),
+                        paste0(colnames(cov_pval)[1:3], "_pval"))
+    res_dat  <- rownames_to_column(as.data.frame(cov_pval), var = "gene_ids")
+    ## Filter features down to gene of interest
+    sub_feat <- features[features$`Gene Symbol` %in% gene,]
+    filt_res <- res_dat[res_dat$gene_ids %in% sub_feat$ID,]
+    ## Geberate final data frame by adjusing pvalues and adding gene symbol
+    ## as a column
+    final_res <- filt_res %>%
+        mutate(across(contains("pval"),
+                      .fns = list(adj = ~p.adjust(., method = "fdr",
+                                                          n = nrow(cov_pval) * ncol(cov_pval)/3))),
+               gene_symbol = gene) %>%
+        select(gene_ids, gene_symbol, everything())
+    ## If you want the actual adjusted values the coe ends
+    ## Else the adjusted values are turned into TRUE and FALSE to summarize results
+    if (sig_t_f == FALSE) {
+        return(final_res)
+    }
+    final_res %>% mutate(across(contains("pval_adj"), .fns = ~ifelse(. <= .05, TRUE, FALSE)))
+}
+## Read in the gene data
+all_tcga_ranks <- read.csv("data_out/all_tcga_current_sum_ranks.csv") %>% arrange(desc(sum_ranks))
+
+## Make gene lists
+top_genes <- head(all_tcga_ranks$genes, 10)
+bot_genes <- tail(all_tcga_ranks$genes, 10)
+
+
+## Below I start testing out possible analysis methods before I make it a data.frame
+post_limma_gene(efit, "WISP2", sig_t_f = T)
+
+top_res <- (lapply(top_genes, function(x){post_limma_gene(efit, x, sig_t_f = T)}))
+do.call(rbind, top_res)
+
+bot_res_list <- (lapply(bot_genes, function(x){post_limma_gene(efit, x, sig_t_f = T)}))
+result_bot  <- do.call(rbind, bot_res_list) %>% mutate(result_type = case_when(
+            CancervsAdjacent_pval_adj == T &
+                AdjacentvsNormal_pval_adj == T &
+                CancervsNormal_pval_adj == T ~ "All Sig",
+                CancervsAdjacent_pval_adj == F &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == F ~ "No Sig",
+                CancervsAdjacent_pval_adj == F &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == T ~ "Norm v cancer sig",
+                CancervsAdjacent_pval_adj == T &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == F ~ "Adj v cancer sig",
+            CancervsAdjacent_pval_adj == T &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == T ~ "Normals sig v cancer",
+                AdjacentvsNormal_pval_adj == T  ~ "Norm mismatch"
+            
+        )) %>% select(gene_ids, gene_symbol, result_type, everything())
+
+gene_list <- top_genes
+fit_dat <- efit
+table_version = TRUE
+
+## Generate summary results functionf or gene lists
+up_o_down = "up"
+summ_gene_list <- function(gene_list, fit_dat, table_version =  FALSE, up_o_down = NA){
+    ### This code is used to summarize the output of the limma with a list
+    ### of genes into a very simplified table or a normal data.frame
+    
+    ## Run lapply to make a list of results from post_limma_gene
+    temp_list <- lapply(gene_list, function(x){post_limma_gene(fit_dat, x, sig_t_f = T)})
+    ## Using case_when to generalize the results for the various oligos per gene
+    temp_res <-  do.call(rbind, temp_list) %>% mutate(result_type = case_when(
+            CancervsAdjacent_pval_adj == T &
+                AdjacentvsNormal_pval_adj == T &
+                CancervsNormal_pval_adj == T ~ "All Sig",
+                CancervsAdjacent_pval_adj == F &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == F ~ "No Sig",
+                CancervsAdjacent_pval_adj == F &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == T ~ "Normal",
+                CancervsAdjacent_pval_adj == T &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == F ~ "Paratumor",
+            CancervsAdjacent_pval_adj == T &
+                AdjacentvsNormal_pval_adj == F &
+                CancervsNormal_pval_adj == T ~ "Combo",
+                AdjacentvsNormal_pval_adj == T  ~ "Norm mismatch"
+            
+        )) %>% select(gene_ids, gene_symbol, result_type, everything())
+    ## Make it a table orn not
+    if (table_version == FALSE) {
+        return(temp_res)
+    }
+    table_return <- as.matrix(table(temp_res$gene_symbol, temp_res$result_type))
+    #table_return[table_return>0] <- 1
+    table_return <- rbind(table_return, colSums(table_return))
+    rownames(table_return)[nrow(table_return)] <- "Sums" 
+    return(table_return)
+}
+
+#table(result_bot$gene_symbol, result_bot$result_type)
+
+top_tab <- summ_gene_list(top_genes,fit_dat = efit, table_version = T)
+top_tab
+bot_tab <- summ_gene_list(bot_genes,fit_dat = efit, table_version = T)
+bot_tab
+
+dat<- top_tab
+pos_o_neg <- "positive"
+combo_o_deep_filter <- function(dat){
+   oppo <- ifelse(pos_o_neg == "positive", "negative", "positive")
+   if ("Paratumor" %in% colnames(dat)) {
+     ind <- dat[-nrow(dat),"Combo"] > 0 | dat[-nrow(dat),"Paratumor"] > 0|
+        dat[-nrow(dat),"Normal"] > 0 
+   } else {
+     ind <- dat[-nrow(dat),"Combo"] > 0 | dat[-nrow(dat),"Normal"] > 0 
+   }
+  
+  dat <- dat[c(ind, TRUE),]
+  return(dat)
+}
+
+top_sig <- combo_o_deep_filter(top_tab)
+bot_sig <- combo_o_deep_filter(bot_tab)
+
+
+temps <- rbind(nrow(top_sig) - 1, nrow(bot_sig) - 1)
+rownames(temps) <- c("Sig Top", "Sig Bot")
+colnames(temps) <- gse
+if (file.exists("data_out/recapitulate_table.csv")) {
+  recap_temp <- read.csv("data_out/recapitulate_table.csv",row.names = 1)
+  recap_temp[[tissue_temp]] <- temps[,1]
+  write.csv(recap_temp,"data_out/recapitulate_table.csv",row.names = T)
+} else{
+  write.csv(temps,"data_out/recapitulate_table.csv")
+}
+
+
+```
+
+
+Quality check GSET
+```{r}
+
+melt_gset <- melt(exprs(gset))
+ggplot(melt_gset,aes(x=value, color=Var2)) + geom_density(alpha=0.25) +
+  theme(legend.position = "none")
+
+melt_gset_log <- melt(log2(exprs(gset)))
+ggplot(melt_gset_log,aes(x=value, color=Var2)) + geom_density(alpha=0.25) +
+  theme(legend.position = "none")
+
+gset_gene_checker <- function(gset_dat, gene){
+    
+    ind <- fData(gset_dat)$`Gene Symbol` %in% gene
+    sub_gset <- ind
+    gset_sub <- gset_dat[ind,]
+    exprs_sub <- exprs(gset_sub)
+    exprs_sub_t <- as.data.frame(t(exprs_sub)) %>%
+        rownames_to_column(var = "sample_id")
+    exprs_sub_t["sample_type"] <- pData(gset_sub)$'sample type:ch1'
+    
+    exprs_melt <- melt(exprs_sub_t,id.vars = c("sample_id", "sample_type"))
+    ggplot(exprs_melt, aes(x = sample_type, y= value)) +
+        geom_sina() +
+        facet_grid(~variable) +
+        theme_classic() +
+        labs(title = paste0("Comparison for gene ", gene))
+}
+
+gene <- "MMP1"
+ind <- fData(gset)$`Gene Symbol` %in% gene
+sub_gset <- ind
+gset_sub <- gset[ind,]
+exprs_sub <- exprs(gset_sub)
+exprs_sub_t <- as.data.frame(t(exprs_sub)) %>%
+    rownames_to_column(var = "sample_id")
+exprs_sub_t["sample_type"] <- pData(gset_sub)$'sample type:ch1'
+
+
+    
+gset_gene_checker(gset, "COL10A1")    
+```
+
+
+```{r}
+top_table_sig_genes <- function(top_table, gene_vect, table_res = FALSE){
+    out_dat <- top_table %>% filter(Gene.symbol %in% gene_vect) %>%
+        select(ID, Gene.symbol, logFC, AveExpr, t, P.Value, P.Value, adj.P.Val)
+    if (table_res == FALSE) {
+        return(out_dat)
+    }
+    temp_dat <- out_dat %>% mutate(sig_adjPVal = ifelse(adj.P.Val < 0.5, "Sig", "Not Sig"),
+                       logFC_direction = ifelse(logFC > 0, "postive", "negative"))
+        
+     table_1 <- as.matrix(table(temp_dat$Gene.symbol, temp_dat$sig_adjPVal))
+     table_1 <- rbind(table_1,colSums(table_1))
+     table_2 <- as.matrix(table(temp_dat$Gene.symbol, temp_dat$logFC_direction))  
+     table_2 <- rbind(table_2,colSums(table_2))
+     table_out <- cbind(table_1, table_2)
+     rownames(table_out)[nrow(table_out)] <- "Sum"
+     return(table_out)
+}
+
+
+top_table_sig_genes()
+```
+
