@@ -1,0 +1,296 @@
+---
+title: "Lung_2_recapitulate"
+author: "Tim Nieuwenhuis"
+date: "12/11/2020"
+output: html_document
+---
+
+GSE19188
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(reshape2)
+library(ggforce)
+
+
+```
+
+
+```{r}
+tissue_temp <- "lung-2"
+gse <- "GSE19188"
+
+# Version info: R 3.2.3, Biobase 2.30.0, GEOquery 2.40.0, limma 3.26.8
+################################################################
+#   Differential expression analysis with limma
+library(GEOquery)
+library(limma)
+library(umap)
+
+# load series and platform data from GEO
+
+gset <- getGEO("GSE19188", GSEMatrix =TRUE, AnnotGPL=TRUE)
+if (length(gset) > 1) idx <- grep("GPL570", attr(gset, "names")) else idx <- 1
+gset <- gset[[idx]]
+
+
+## Tim Filter
+samp_dat <- pData(gset)
+ind <- samp_dat$`cell type:ch1` %in% c("ADC", "healthy")
+gset <- gset[,ind]
+samp_dat <- pData(gset)
+sml <- as.numeric(str_detect(samp_dat$`cell type:ch1`, "ADC"))
+```
+
+```{r}
+# make proper column names to match toptable 
+fvarLabels(gset) <- make.names(fvarLabels(gset))
+
+# group membership for all samples
+## Removing this as I made sml above
+# gsms <- paste0("11111111111111111111111111111111111111111111111111",
+#         "11111111111111111111111111111111111111111111111111",
+#         "11111111111111111111111111111111111111111111111111",
+#         "11111111111111111111111111111111111111111111111111",
+#         "1111111111111111111111111100000000000000000000")
+# sml <- strsplit(gsms, split="")[[1]]
+
+# log2 transformation
+ex <- exprs(gset)
+qx <- as.numeric(quantile(ex, c(0., 0.25, 0.5, 0.75, 0.99, 1.0), na.rm=T))
+LogC <- (qx[5] > 100) ||
+          (qx[6]-qx[1] > 50 && qx[2] > 0)
+if (LogC) { ex[which(ex <= 0)] <- NaN
+  exprs(gset) <- log2(ex) }
+
+## The automatic code doesn't log2, but the data seems to need it to be normal
+## so I'm gonna do it
+# prelog_gset <- gset
+# exprs(gset) <- log2(ex)
+# hist(exprs(gset))
+
+# assign samples to groups and set up design matrix
+gs <- factor(sml)
+groups <- make.names(c("normal","adenocarcinoma"))
+levels(gs) <- groups
+gset$group <- gs
+design <- model.matrix(~group + 0, gset)
+colnames(design) <- levels(gs)
+
+fit <- lmFit(gset, design)  # fit linear model
+
+# set up contrasts of interest and recalculate model coefficients
+#cts <- paste(groups[1], groups[2], sep="-")
+## Reordering to make the results make sense
+cts <- paste(groups[2], groups[1], sep="-")
+cont.matrix <- makeContrasts(contrasts=cts, levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+
+# compute statistics and table of top significant genes
+fit2 <- eBayes(fit2, 0.01)
+tT <- topTable(fit2, adjust="fdr", sort.by="B", number=250)
+
+tT <- subset(tT, select=c("ID","adj.P.Val","P.Value","t","B","logFC","Gene.symbol","Gene.title"))
+write.table(tT, file=stdout(), row.names=F, sep="\t")
+
+# Visualize and quality control test results.
+# Build histogram of P-values for all genes. Normal test
+# assumption is that most genes are not differentially expressed.
+tT2 <- topTable(fit2, adjust="holm", sort.by="B", number=Inf)
+hist(tT2$adj.P.Val, col = "grey", border = "white", xlab = "P-adj",
+  ylab = "Number of genes", main = "P-adj value distribution")
+
+# summarize test results as "up", "down" or "not expressed"
+dT <- decideTests(fit2, adjust.method="fdr", p.value=0.05)
+
+# Venn diagram of results
+vennDiagram(dT, circle.col=palette())
+
+# create Q-Q plot for t-statistic
+t.good <- which(!is.na(fit2$F)) # filter out bad probes
+qqt(fit2$t[t.good], fit2$df.total[t.good], main="Moderated t statistic")
+
+# volcano plot (log P-value vs log fold change)
+colnames(fit2) # list contrast names
+ct <- 1        # choose contrast of interest
+volcanoplot(fit2, coef=ct, main=colnames(fit2)[ct], pch=20,
+  highlight=length(which(dT[,ct]!=0)), names=rep('+', nrow(fit2)))
+
+# MD plot (log fold change vs mean log expression)
+# highlight statistically significant (p-adj < 0.05) probes
+plotMD(fit2, column=ct, status=dT[,ct], legend=F, pch=20, cex=1)
+abline(h=0)
+
+################################################################
+# General expression data analysis
+ex <- exprs(gset)
+
+# box-and-whisker plot
+dev.new(width=3+ncol(gset)/6, height=5)
+ord <- order(gs)  # order samples by group
+palette(c("#1B9E77", "#7570B3", "#E7298A", "#E6AB02", "#D95F02",
+          "#66A61E", "#A6761D", "#B32424", "#B324B3", "#666666"))
+par(mar=c(7,4,2,1))
+title <- paste ("GSE31210", "/", annotation(gset), sep ="")
+boxplot(ex[,ord], boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=gs[ord])
+legend("topleft", groups, fill=palette(), bty="n")
+dev.off()
+
+# expression value distribution
+par(mar=c(4,4,2,1))
+title <- paste ("GSE31210", "/", annotation(gset), " value distribution", sep ="")
+plotDensities(ex, group=gs, main=title, legend ="topright")
+
+# UMAP plot (dimensionality reduction)
+ex <- na.omit(ex) # eliminate rows with NAs
+ex <- ex[!duplicated(ex), ]  # remove duplicates
+ump <- umap(t(ex), n_neighbors = 15, random_state = 123)
+par(mar=c(3,3,2,6), xpd=TRUE)
+plot(ump$layout, main="UMAP plot, nbrs=15", xlab="", ylab="", col=gs, pch=20, cex=1.5)
+legend("topright", inset=c(-0.15,0), legend=levels(gs), pch=20,
+col=1:nlevels(gs), title="Group", pt.cex=1.5)
+library("maptools")  # point labels without overlaps
+pointLabel(ump$layout, labels = rownames(ump$layout), method="SANN", cex=0.6)
+
+# mean-variance trend, helps to see if precision weights are needed
+plotSA(fit2, main="Mean variance trend, GSE31210")
+
+
+tT2 %>% filter(Gene.symbol == "COL10A1")
+
+
+## Read in the gene data
+all_tcga_ranks <- read.csv("data_out/all_tcga_current_sum_ranks.csv") %>% arrange(desc(sum_ranks))
+
+
+
+## Make gene lists
+top_genes <- head(all_tcga_ranks$genes, 10)
+bot_genes <- tail(all_tcga_ranks$genes, 10)
+
+prostate_ranks <- all_tcga_ranks %>% arrange(desc(rank_change_prostate_quant))
+
+## Top prostate genes
+top_prost <- head(prostate_ranks$genes, 10)
+bot_prost <- tail(prostate_ranks$genes, 10)
+
+tT2 %>% filter(Gene.symbol %in% c(top_genes, bot_genes)) %>%
+    select(ID, Gene.symbol, logFC, AveExpr, t, P.Value, P.Value, adj.P.Val)
+
+
+```
+
+```{r}
+gset_dat <- gset
+gene = "MMP1"
+gset_gene_checker <- function(gset_dat, gene){
+    
+    ind <- fData(gset_dat)$Gene.symbol %in% gene
+    sub_gset <- ind
+    gset_sub <- gset_dat[ind,]
+    exprs_sub <- exprs(gset_sub)
+    exprs_sub_t <- as.data.frame(t(exprs_sub)) %>%
+        rownames_to_column(var = "sample_id")
+    exprs_sub_t["sample_type"] <- pData(gset_sub)$group
+    
+    exprs_melt <- melt(exprs_sub_t,id.vars = c("sample_id", "sample_type"))
+    ggplot(exprs_melt, aes(x = sample_type, y= value)) +
+        geom_sina() +
+        facet_grid(~variable) +
+        theme_classic() +
+        labs(title = paste0("Comparison for gene ", gene))
+}
+
+gset_gene_checker(gset, "MMP11")
+
+lapply(top_genes, function(x){gset_gene_checker(gset, x)})
+lapply(bot_genes, function(x){gset_gene_checker(gset, x)})
+```
+
+How many oligos are sig per gene
+
+```{r}
+library(psych)
+tT2 %>% filter(Gene.symbol %in% c(top_genes, bot_genes)) %>%
+    select(ID, Gene.symbol, logFC, AveExpr, t, P.Value, P.Value, adj.P.Val)
+
+gene_vect <- bot_genes
+top_table <- tT2
+top_table_sig_genes <- function(top_table, gene_vect, table_res = FALSE,
+                                drop_not_sig = FALSE,
+                                half_or_more = FALSE){
+    out_dat <- top_table %>% filter(Gene.symbol %in% gene_vect) %>%
+        select(ID, Gene.symbol, logFC, AveExpr, t, P.Value, P.Value, adj.P.Val)
+    if (table_res == FALSE) {
+        return(out_dat)
+    }
+    temp_dat <- out_dat %>% mutate(sig_adjPVal = ifelse(adj.P.Val < 0.5, "Sig", "Not Sig"),
+                       logFC_direction = ifelse(logFC > 0, "postive", "negative"))
+    
+
+    
+    
+    if (drop_not_sig == TRUE) {
+        temp_dat <- filter(temp_dat, sig_adjPVal == "Sig")
+        # temp_tab  <- as.matrix(table(temp_dat$Gene.symbol, temp_dat$sig_adjPVal))
+        # temp_tab[,2] >= temp_tab[,1]
+    }
+        
+     table_1 <- as.matrix(table(temp_dat$Gene.symbol, temp_dat$sig_adjPVal))
+     table_1 <- rbind(table_1,colSums(table_1))
+     table_2 <- as.matrix(table(temp_dat$Gene.symbol, temp_dat$logFC_direction))  
+     table_2 <- rbind(table_2,colSums(table_2))
+     table_out <- cbind(table_1, table_2)
+     rownames(table_out)[nrow(table_out)] <- "Sum"
+     return(table_out)
+}
+
+top_sig <- top_table_sig_genes(tT2, top_genes, table_res = T,  drop_not_sig = T)
+top_sig
+
+bot_sig <- top_table_sig_genes(tT2, bot_genes, table_res = T,  drop_not_sig = T)
+bot_sig
+
+
+temps <- rbind(nrow(top_sig) - 1, nrow(bot_sig) - 1)
+rownames(temps) <- c("Sig Top", "Sig Bot")
+colnames(temps) <- gse
+if (file.exists("data_out/recapitulate_table.csv")) {
+  recap_temp <- read.csv("data_out/recapitulate_table.csv",row.names = 1)
+  recap_temp[[tissue_temp]] <- temps[,1]
+  write.csv(recap_temp,"data_out/recapitulate_table.csv",row.names = T)
+  
+} else{
+  write.csv(temps,"data_out/recapitulate_table.csv")
+}
+
+```
+
+Permutation test
+```{r} 
+permute_data <- tT2 %>% filter(!Gene.symbol == "") %>% distinct(Gene.symbol, .keep_all = TRUE)
+
+set.seed(123)
+
+sig_count <- NULL
+nosig_count <- NULL
+for (k in 1:1000) {
+  temp_genes <- sample(permute_data$Gene.symbol,size = 10)
+  tab_out <- top_table_sig_genes(permute_data, temp_genes, table_res = T,one_or_zero = T)
+  if ("Sig" %in% colnames(tab_out)) {
+    sig_count <- append(sig_count,  tab_out[11,c("Sig")] )
+  } else {
+    sig_count <- append(sig_count,  0)
+  }
+  if ("Not Sig" %in% colnames(tab_out)) {
+    nosig_count <- append(nosig_count,  tab_out[11,c("Not Sig")] )
+  } else {
+    nosig_count <- append(nosig_count,  0)
+  }
+  
+}
+hist(nosig_count)
+hist(sig_count)
+temp_genes <- sample(permute_data$Gene.symbol,size = 10)
+```
+
