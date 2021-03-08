@@ -42,6 +42,6 @@ This Github Repo exists for the purpose of giving individuals the ability to rep
    * **esophagus_recapitulate.rmd**: Analysis of GSE161533, called esophagus.
    * **colon_recapitulate.rmd**: Analysis of GSE44076, called colon.
 * **GTEx_age_sex_analysis**: Code for all age and sex related analyses. Code to generate Fig 2A, 2C, Fig 3A, 3B, 3C, 3D, 3F, Fig S3, and Fig S4.
-      * **age_sex_analysis_code_v8.rmd**: Analysis of limma results and ImageJ colon transverse results. Used to generate Fig 2A, 2C, 3A, 3B, and 3C.
-      * **adipose_sex_analysis**: Analyzing the results that came from ImageJ and adipose tissue expression. Used to generate Fig 3D and 3F.
+   * **age_sex_analysis_code_v8.rmd**: Analysis of limma results and ImageJ colon transverse results. Used to generate Fig 2A, 2C, 3A, 3B, and 3C.
+   * **adipose_sex_analysis**: Analyzing the results that came from ImageJ and adipose tissue expression. Used to generate Fig 3D and 3F.
 
