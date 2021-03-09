@@ -1,0 +1,90 @@
+---
+title: "Body Wide Adipoq File"
+author: "Tim Nieuwenhuis"
+date: "10/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("../global_in//tim_scripts.R")
+```
+
+
+```{r Options}
+genes = c("ADIPOQ")
+tissue_list = c("colon_transverse", "adipose_subcutaneous",	"adipose_visceral__omentum",
+                     "colon_sigmoid")
+compare_columns = c("BMI", "AGE")
+```
+
+Load in gene data, then phenotype data
+```{r}
+
+#Empty data frame
+gene_frame <- data.frame()
+
+#Load in tissues
+tissue = tissue_list[42]
+for (tissue in tissue_list) {
+  load(paste0("~/Halushka Lab/GTEx_variation/variation_tools/gtex_variation_toolbox/input_data/rda_output/",tissue,"-vsd-mean-filtered.rda"))
+  ## Pull out reads
+  gene_dat <- assay(get(paste0(tissue,"VSDMeanFiltered")))     
+  ## Pull out genes of interes
+  ind <- gtabMeanFiltered$gene_name %in% genes
+  sub_gtab <- gtabMeanFiltered[ind,,drop = F]
+  sub_dat <- gene_dat[ind,,drop = F]   
+  rownames(sub_dat) <- sub_gtab$gene_name
+  t_dat <- as.data.frame(t(sub_dat))
+  t_dat$tissue <- tissue
+  ## Bind new tissues data to current data
+  gene_frame <- rbind(t_dat, gene_frame)
+}
+
+gene_frame <- rownames_to_column(gene_frame, var = "SAMPID")
+
+gene_frame$SUBJID <- shorter_gtex_names_vect(gene_frame)
+
+#Load in subj data
+subject_dat  <- as.data.frame(
+  fread('../global_in/GTEx_Analysis_v8_Annotations_SubjectPhenotypesDS.txt'))
+
+
+final_frame <- left_join(gene_frame, subject_dat)
+
+```
+
+
+Top 10 and bottom 10 of gene group (systemic increase or decrease)
+```{r}
+genes <- c("ADIPOQ")
+specific_tissue <- c("adipose_subcutaneous",	"adipose_visceral__omentum",
+                     "colon_sigmoid", "colon_transverse")
+
+syst_frame <- final_frame %>% select(SUBJID, genes, tissue) %>% filter((tissue %in% specific_tissue))
+
+gene_frame_nas <- dcast(syst_frame, SUBJID ~ tissue, value.var = genes) 
+gene_frame <- gene_frame_nas %>% drop_na(specific_tissue)
+
+
+
+#Get age in to check if still sig
+gene_frame <- left_join(gene_frame, subject_dat %>% select(SUBJID, AGE))
+
+
+gene_frame <- gene_frame %>%
+                            mutate(gene_body = rowSums(select(.,specific_tissue))/length(specific_tissue)) %>%
+                            arrange(desc(gene_body))
+
+hist_tiss <- final_frame %>% select(SAMPID, SUBJID, tissue) %>% filter(tissue %in% specific_tissue)
+
+hist_tiss <- dcast(hist_tiss, SUBJID ~ tissue, value.var = "SAMPID") %>% drop_na()
+
+
+final_body <- left_join(gene_frame, hist_tiss, by = "SUBJID")
+
+final_body_out <- rbind(head(final_body, 10), tail(final_body, 10))
+
+write.csv(final_body_out, "output//top_bottom_ADIPOQ.csv", row.names = F)
+
+```
