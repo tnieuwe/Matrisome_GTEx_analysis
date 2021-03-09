@@ -15,19 +15,19 @@ SAMPID_to_SUBJID <- function(sampids){
 }
 
 ## Gene count location
-gene_count_location <- "GTEx_age_sex_analysis/input/gtex-gene-counts-v8-new.rda"
+gene_count_location <- "~/work2/tnieuwe1/data/gtex_v8/gtex-gene-counts-v8.rda"
 ## Subject data location
-subject_location <-  "GTEx_age_sex_analysis/input/gtex_phenotypes_v8.csv"
+subject_location <-  "~/work2/tnieuwe1/data/gtex_v8/gtex_phenotypes_v8.csv"
 ## Matrisome data location
-matrisome_location <- "global_in/matrisome_hs_masterlist_EDIT_r.csv"
+matrisome_location <- "~/work2/tnieuwe1/data/gtex_v8/matrisome_dat/matrisome_hs_masterlist_EDIT_r.csv"
 ## Age and sex output location
-ans_output <- "GTEx_age_sex_analysis/output/"
+ans_output <- "~/work2/tnieuwe1/data/gtex_v8/matrisome_dat/age_sex_output/"
 ## Current tiss
-cur_tiss <- "Nerve - Tibial"
+cur_tiss <- "tish"
 
 ## Load in the read counts and other files
 ## read counts, gene names, sample data
-#load(gene_count_location)
+load(gene_count_location)
 ## SUBJID data
 subj_dat <- read.csv(subject_location)
 ## Matrisome data
@@ -39,7 +39,7 @@ mat_dat_core <- filter(mat_dat, Division == "Core matrisome" |
                            Category == "ECM Regulators")
 
 
-##Filter to thyroid and remove low count genes
+##Filter to general and remove low count genes
 ind <- stab$SMTSD %in% cur_tiss
 stab_filt <- stab[ind,]
 sub_dat <- dat[,ind]
@@ -65,13 +65,6 @@ if (length(unique(samp_n_subj$SEX)) > 1) {
 }
 ## Normalize with voom
 voom_dat <- voom(sub_dat, design = design)
-mmp3_dt <- voom_dat$E[ind,]
-t_mmp3_dt <- t(mmp3_dt)
-plot(t_mmp3_dt[,1], t_mmp3_dt[,2])
-cor.test(t_mmp3_dt[,1], t_mmp3_dt[,2])
-## Quick test
-ind <- gtab_filt$gene_name %in% c("MMP3", "HBB")
-
 ## Run lmFit to fit the model
 vfit <- lmFit(voom_dat, design)
 ## Run eBayes to generate statistics and DE results.
@@ -79,7 +72,7 @@ efit <- eBayes(vfit)
 
 ### Clean up data
 ## Pull out the results of SCALEDAGE
-age_results_limma <- topTable(efit,coef=2, sort = "none", n =Inf, adjust.method = "holm")
+age_results_limma <- topTable(efit,coef=2, sort = "none", n =Inf)
 age_results_mat <- age_results_limma %>%
     rownames_to_column(var = "gene_id") %>%
     left_join(., gtab_filt) %>%
@@ -87,7 +80,7 @@ age_results_mat <- age_results_limma %>%
 
 ## Pull out the results of SEX
 if (length(unique(samp_n_subj$SEX)) > 1) {
-    sex_results_limma <- topTable(efit,coef=3, sort = "none", n =Inf, adjust.method = "holm")
+    sex_results_limma <- topTable(efit,coef=3, sort = "none", n =Inf)
     sex_results_mat <- sex_results_limma %>%
         rownames_to_column(var = "gene_id") %>%
         left_join(., gtab_filt) %>%
@@ -97,7 +90,7 @@ if (length(unique(samp_n_subj$SEX)) > 1) {
 
 
 ## save output
-write.csv(age_results_mat, paste0(ans_output, "limma_thyroid_res_age.csv"),row.names = F)
+write.csv(age_results_mat, paste0(ans_output, "limma_general_res_age.csv"),row.names = F)
 if (length(unique(samp_n_subj$SEX)) > 1) {
-    write.csv(sex_results_mat, paste0(ans_output, "limma_thyroid_res_sex.csv"),row.names = F)
+    write.csv(sex_results_mat, paste0(ans_output, "limma_general_res_sex.csv"),row.names = F)
 }
