@@ -1,0 +1,83 @@
+---
+title: "Set up analysis code"
+author: "Tim Nieuwenhuis"
+date: "3/9/2021"
+output: html_document
+---
+
+## Purpose
+The purpose of this rmd file is to generate various datasets and rda's used in this analysis. Many of these files and their results can end up being quite large so it is suggested you have 16 gb of ram on the computer you decide to run this on.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(R.utils)
+library(tidyverse)
+library(DESeq2)
+library(data.table)
+```
+
+Generate gtex counts RDA
+
+```{r cars}
+### Download the required files from GTEx portal 
+## Get reaadcounts of genes
+download.file("https://storage.googleapis.com/gtex_analysis_v8/rna_seq_data/GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_reads.gct.gz",
+              destfile = "downloaded_input/gtex_read_counts.gct.gz")
+gunzip("downloaded_input/gtex_read_counts.gct.gz",remove = T)
+## Get sample data
+stab <- fread("https://storage.googleapis.com/gtex_analysis_v8/annotations/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt",
+              data.table = FALSE)
+
+## Load in read counts and make gene object
+dat <- fread("downloaded_input/gtex_read_counts.gct",data.table = FALSE)
+gtab <- dat[,1:2]
+colnames(gtab) <- c("gene_id", "gene_name")
+dat <- dat[,-1:-2]
+rownames(dat) <- gtab$gene_id
+
+## Remove unused samples
+stab <- dplyr::filter(.data = stab, SAMPID %in% colnames(dat))
+## Make sure samples are in teh same orer as the gtab
+ncol(dat) == sum(stab$SAMPID == colnames(dat))
+
+## Save data
+save(dat, gtab, stab, file = "output/gtex-gene-counts-v8.rda")
+```
+
+Generate rda files used for the colon individual selector
+```{r}
+load("output/gtex-gene-counts-v8.rda")
+tissue_list = c("colon_transverse", "adipose_subcutaneous",	"adipose_visceral__omentum",
+                     "colon_sigmoid")
+tissue_names = c("Colon - Transverse", "Adipose - Subcutaneous",
+                 "Adipose - Visceral (Omentum)", "Colon - Sigmoid")
+
+for (j in seq(4)) {
+    cur_tiss <- tissue_list[j]
+    cur_name <- tissue_names[j]
+    
+    ind <- which(stab$SMTSD%in% cur_name)
+
+    filt_dat <- dat[,ind]
+    filt_stab <- stab[ind,]
+
+    des_dat <- DESeqDataSetFromMatrix(countData = filt_dat,
+                               colData = filt_stab,
+                               design = ~ 1)
+    ## We used varianceStabilizingTransformation() but use vst to save time
+    vst_dat <- vst(des_dat)
+    m <- rowMeans(assay(vst_dat))
+    ## select clearly expressed genes
+    ind <- which(m>5)
+    gtabMeanFiltered <- gtab[ind,]
+    generalVSDMeanFiltered <- vst_dat[ind,]
+    #assign(paste0(cur_tiss,"VSDMeanFiltered"), generalVSDMeanFiltered)
+    
+    save(gtabMeanFiltered, generalVSDMeanFiltered,
+         file=paste0("output/",
+                     cur_tiss,"-vsd-mean-filtered.rda"))
+    
+}
+
+```
+
