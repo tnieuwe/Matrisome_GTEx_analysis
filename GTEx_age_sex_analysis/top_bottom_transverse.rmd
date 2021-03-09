@@ -27,9 +27,9 @@ gene_frame <- data.frame()
 #Load in tissues
 tissue = tissue_list[42]
 for (tissue in tissue_list) {
-  load(paste0("~/Halushka Lab/GTEx_variation/variation_tools/gtex_variation_toolbox/input_data/rda_output/",tissue,"-vsd-mean-filtered.rda"))
+  load(paste0("../Setup Code/output/",tissue,"-vsd-mean-filtered.rda"))
   ## Pull out reads
-  gene_dat <- assay(get(paste0(tissue,"VSDMeanFiltered")))     
+  gene_dat <- assay(get(paste0("general","VSDMeanFiltered")))     
   ## Pull out genes of interes
   ind <- gtabMeanFiltered$gene_name %in% genes
   sub_gtab <- gtabMeanFiltered[ind,,drop = F]
