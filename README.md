@@ -43,5 +43,12 @@ This Github Repo exists for the purpose of giving individuals the ability to rep
    * **colon_recapitulate.rmd**: Analysis of GSE44076, called colon.
 * **GTEx_age_sex_analysis**: Code for all age and sex related analyses. Code to generate Fig 2A, 2C, Fig 3A, 3B, 3C, 3D, 3F, Fig S3, and Fig S4.
    * **age_sex_analysis_code_v8.rmd**: Analysis of limma results and ImageJ colon transverse results. Used to generate Fig 2A, 2C, 3A, 3B, and 3C.
-   * **adipose_sex_analysis**: Analyzing the results that came from ImageJ and adipose tissue expression. Used to generate Fig 3D and 3F.
-
+   * **adipose_sex_analysis.rmd**: Analyzing the results that came from ImageJ and adipose tissue expression. Used to generate Fig 3D and 3F.
+   * **top_bottom_transverse.rmd**: The code used to select individuals to analyze in the transverese colon analysis using ImageJ based on their normalized *ADIPOQ* expression.
+* **Setup Code**: Extra code not used in the original analysis, but it allows the creation of various files used i nthe analysis itself.
+   * **set_up_code.rmd**: An RMD files generating several files used in tha analysis:
+      * **Generate gtex counts RDA**: Makes an rda file (gtex-gene-counts-v8.rda) from GTEx count data which includes:
+         * dat:  Raw count gtex data with genes as rows and samples as columns
+         * gtab: A two column dataframe including ENSG gene names and symbols
+         * stab: A dataframe including sample data for all samples in the count data frame.
+      * **Generate rda files used for the colon individual selector**: This section prepares vst normalized versions of colon transverse, colon sigmoid, adipose subcutaneous, and adipose visceral (omentum) used for selecting individuals in the file GTEx_age_sex_analysis/top_bottom_transverse.rmd.
