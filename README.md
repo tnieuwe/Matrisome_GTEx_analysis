@@ -23,7 +23,6 @@ This Github Repo exists for the purpose of giving individuals the ability to rep
       * gtex_name_translator: Used to connect GTEx tissue names through their various forms in this dataset (normal string, snake_case, abbreviations).
       * median_gtex_v8: The output from the MARCC files that includes all tissues and their median VST normalized expression.
       * median_tpm_v8: The median TPM data from the GTEx portal, download [here](https://storage.googleapis.com/gtex_analysis_v8/rna_seq_data/GTEx_Analysis_2017-06-05_v8_RNASeQCv1.1.9_gene_tpm.gct.gz)
-* **GTEx_median_tissue_comparisons**: Slated for removal, obsolete version of **GTEx_intra_tissue_comparisons**.
 * **GTEx_TCGA_comparison**: The analysis comparing GTEx normal tissue and TCGA normal tissue, against TCGA cancer tissue. Includes code for Fig 4.
    * **quantile_rank_analysis**: An rmd that allows one to go through the entire analysis for whichever tissue they are interested in.
    * **quantile_rank_analysis_all_tissue**: An R file that is a loop of **quantile_rank_analysis** going through all tissues and generating all required files for **rank_output_analysis**.
