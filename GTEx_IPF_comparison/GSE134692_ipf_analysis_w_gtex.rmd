@@ -16,6 +16,8 @@ library(GMD)
 library(fields)
 library(viridis)
 library(data.table)
+library(RColorBrewer)
+library(pheatmap)
 #matrisome_dat <- read.csv("matrisome_hs_masterlist_EDIT_r.csv")
 
 #colnames(matrisome_dat)[1] <- "Division"
@@ -272,7 +274,7 @@ samp_phen$Age <- case_when(
 ## Make anno-mat
 
 anno_mat <- reshape2::melt(clusters_df, measure.vars = c("A.1", "A.2")) %>%
-  rename(variable = "Cluster", value = "Gene.Symbol") %>%
+  rename(Cluster = "variable", Gene.Symbol = "value") %>%
   mutate(Cluster = gsub("[.]", "-", Cluster)) %>%
   filter(Gene.Symbol != "")
 anno_mat <- left_join(anno_mat, mat_dat) %>% column_to_rownames("Gene.Symbol") %>%
@@ -426,7 +428,7 @@ head(clusterProfiles)
 
 ```{r}
 analysis_df <- cbind(cbind(samp_dat_join, factor(dendo_cut)), clusterProfiles) %>%
-  rename(`factor(dendo_cut)` = "samp_clust") %>%
+  rename(samp_clust = "factor(dendo_cut)") %>%
   mutate(sex = ifelse(sex == "M", "Male", "Female"),
          Batch = as.character(Batch),
          DiseaseStatus = as.character(DiseaseStatus),
@@ -458,6 +460,8 @@ exp(log_model_summ$coefficients)
 exp(cbind(OR = coef(log_model), confint(log_model)))
 
 summary(glm(ipf_tf ~ Age + tobacco + sex + Batch, data = analysis_df, family = "binomial"))
+
+write.csv(tidy(a1_Summ), file = "data_out/Supplemental_Table_S9.csv", row.names = F)
 ```
 
 Remake figure six with new data
