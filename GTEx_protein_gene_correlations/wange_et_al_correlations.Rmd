@@ -591,7 +591,13 @@ final_df <- rbind(final_df, temp_df)
 
 }
 
-summ_df <- final_df %>%  dplyr::group_by(Tissue) %>%
+final_df <- final_df %>%
+  dplyr::rename(Tissue = cur_tiss,
+                Spearman_Rho = rho_perm,
+                Mat_Core = test_core.estimate) 
+
+summ_df <- final_df %>%
+  dplyr::group_by(Tissue) %>%
   summarise(q_25 = quantile(Spearman_Rho, .25), q_75 = quantile(Spearman_Rho, .75),
             stdv = sd(Spearman_Rho),
             mean_rho = mean(Spearman_Rho),
@@ -612,7 +618,7 @@ ggplot(final_plot) +
   theme(axis.text.x = element_text(angle = 85, hjust = 1))
 
 
-ggsave("data_out/rho_permuted_core_reg_all_stdv.pdf", height = 7, width = 13)
+ggsave("data_out/fig_1_a.pdf", height = 7, width = 13)
 
 summ_df_table <- summ_df %>% mutate(over_25 = ifelse(Mat_Core >= q_25, TRUE, FALSE),
                                     over_bot_stdv = ifelse(Mat_Core >= (mean_rho - stdv),
@@ -734,7 +740,7 @@ table(summ_df_table$over_25)
 
 table(summ_df_table$over_bot_stdv)
 
-write.csv(summ_df_table, file = "data_out/collagen_gene_corr.csv")
+write.csv(summ_df_table, file = "data_out/collagen_gene_corr_fig_S_2D.csv")
 
 ```
 
@@ -847,7 +853,7 @@ table(summ_df_table$over_25)
 
 table(summ_df_table$over_bot_stdv)
 
-write.csv(summ_df_table, file = "data_out/glycoprotein_gene_corr.csv")
+write.csv(summ_df_table, file = "data_out/glycoprotein_gene_corr_fig_S_2C.csv")
 
 ```
 
@@ -959,7 +965,7 @@ table(summ_df_table$over_25)
 
 table(summ_df_table$over_bot_stdv)
 
-write.csv(summ_df_table, file = "data_out/regulators_gene_corr.csv")
+write.csv(summ_df_table, file = "data_out/regulators_gene_corr_fig_S_2B.csv")
 
 ```
 
@@ -1071,7 +1077,7 @@ table(summ_df_table$over_25)
 
 table(summ_df_table$over_bot_stdv)
 
-write.csv(summ_df_table, file = "data_out/proteoglycans_gene_corr.csv")
+write.csv(summ_df_table, file = "data_out/proteoglycans_gene_corr_fig_S_2A.csv")
 
 ```
 
