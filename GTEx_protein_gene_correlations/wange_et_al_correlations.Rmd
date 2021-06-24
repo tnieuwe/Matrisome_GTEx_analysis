@@ -951,7 +951,7 @@ ggplot(final_plot) +
   geom_crossbar(data = summ_df, aes(x = Tissue, y = mean_rho - stdv),
                 ymin=0, ymax=0, fatten = 1, color = "red")  +
   theme_classic() +
-  labs(title = "Permuted Correlations for Regulatorss Correlations", y= "Spearman Rho Correlatiosn") +
+  labs(title = "Permuted Correlations for Regulators Correlations", y= "Spearman Rho Correlatiosn") +
   theme(axis.text.x = element_text(angle = 85, hjust = 1))
 
 
@@ -1220,8 +1220,20 @@ median(summarised_cor_reg$distr_mean)
 #Median of the matrisome_rhos
 median(summarised_cor_reg$matrisome_rho)
 
+save.image("data_out/wang_et_al_results_24_6_2021")
 ```
 
+Check how well matrisome sub-groups perform
+```{r}
+table(read.csv("data_out/proteoglycans_gene_corr_fig_S_2A.csv")[,"over_bot_stdv"])
+table(read.csv("data_out/collagen_gene_corr_fig_S_2D.csv")[,"over_bot_stdv"])
+table(read.csv("data_out/glycoprotein_gene_corr_fig_S_2C.csv")[,"over_bot_stdv"])
+table(read.csv("data_out/regulators_gene_corr_fig_S_2B.csv")[,"over_bot_stdv"])
+table(read.csv("data_out/no_glyco_gene_corr.csv")[,"over_bot_stdv"])
+table(read.csv("data_out/protein_gene_corr.csv")[,"over_bot_stdv"])
+sum(table(read.csv("data_out/regulators_gene_corr_fig_S_2B.csv")[,"over_bot_stdv"]))
+
+```
 
 
 
