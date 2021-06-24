@@ -63,7 +63,8 @@ sub_dat <- rownames_to_column(sub_dat, "SAMPID")
 sub_dat$SUBJID <- shorter_gtex_names_vect(sub_dat) 
 sub_dat <- left_join(indv_phe,sub_dat)
 sub_dat$tissue <- "subcutaneous"
-
+sub_dat_final <- sub_dat %>%
+  mutate(SEX = ifelse(SEX == 1, "Male", "Female"))
 #Visc dat
 rownames(visc_dat) <- visc_gtab$gene_name
 visc_dat <- as.data.frame(t(visc_dat))
@@ -71,7 +72,8 @@ visc_dat <- rownames_to_column(visc_dat, "SAMPID")
 visc_dat$SUBJID <- shorter_gtex_names_vect(visc_dat) 
 visc_dat <- left_join(indv_phe, visc_dat)
 visc_dat$tissue <- "visceral"
-
+visc_dat_final <- visc_dat %>%
+  mutate(SEX = ifelse(SEX == 1, "Male", "Female"))
 #All fat
 fat_dat <- rbind(sub_dat, visc_dat)
 fat_dat$SEX <- ifelse(fat_dat$SEX == 1, "Male", "Female")
@@ -109,7 +111,7 @@ samptab <- read.table("input/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt
 
 sub_samp <- filter(samptab, SMTSD == "Adipose - Subcutaneous",
                    SAMPID %in% sub_dat_final$SAMPID) %>%
-  select(SAMPID, SMPTHNTS, SMTSD) %>% filter(
+  select(SAMPID, SMPTHNTS, SMTSD,SMTSISCH) %>% filter(
     str_detect(SMPTHNTS, "[Ff]ib") |
       str_detect(SMPTHNTS, "[Ff]asc")
   ) %>% mutate(fibrous_bin = case_when(
@@ -157,7 +159,7 @@ addmargins(table(sub_samp_join$SEX, sub_samp_join$fibrous_bin))
 
 visc_samp <- filter(samptab,
                    SAMPID %in% visc_dat_final$SAMPID) %>%
-  select(SAMPID, SMPTHNTS, SMTSD) %>% filter(
+  select(SAMPID, SMPTHNTS, SMTSD,SMTSISCH) %>% filter(
     str_detect(SMPTHNTS, "[Ff]ib") |
       str_detect(SMPTHNTS, "[Ff]asc")
   ) %>% mutate(fibrous_bin = case_when(
@@ -332,6 +334,7 @@ ggplot(visc_samp_join, aes(fibrous_bin, C)) +
 order_B_sub <- sub_samp_join %>%
   arrange(desc(B)) %>%
   filter(SUBJID %in% visc_samp_join$SUBJID) %>%
+  mutate(SEX = ifelse(SEX == 1, "Male", "Female")) %>%
   select(SAMPID, SUBJID, B, fibrous_bin, SEX, SMTSD)
 
 order_M_sub <- order_B_sub %>% filter(SEX == "Male")
@@ -634,16 +637,16 @@ ggplot(test_median, aes(SEX, med_per)) +
 
 test_2_visc <- filter(test_2, str_detect(SMTSD, "Vis"))
 
-model_visc_fat <- lmer(percent ~ `B.1 Zscore` + SEX + (1|SUBJID), data = test_2_visc)
+model_visc_fat <- lmer(percent ~ `B.1 Zscore` + SEX +  SMTSISCH +(1|SUBJID), data = test_2_visc)
 
 summary(model_visc_fat)
 
-model_sub_fat <- lmer(percent ~ `B.1 Zscore` + SEX + BMI+ (1|SUBJID), data = test_2_sub)
+model_sub_fat <- lmer(percent ~ `B.1 Zscore` + SEX + BMI+ SMTSISCH + (1|SUBJID), data = test_2_sub)
 
 summary(model_sub_fat)
 
 
-model_all_fat <- lmer(percent ~ `B.1 Zscore` + SEX + SMTSD + (1|SUBJID), data = test_2)
+model_all_fat <- lmer(percent ~ `B.1 Zscore` + SEX + SMTSD + SMTSISCH + (1|SUBJID), data = test_2)
 
 summary(model_all_fat)
 
@@ -656,7 +659,7 @@ Plot comparing B scores between sexes
 ```{r}
 #### Male female cluster B Subcut
 subc_B_df$SUBJID <- shorter_gtex_names_vect(subc_B_df , col = 1)
-subc_b_df_2 <- left_join(subc_B_df, indv_phe) 
+subc_b_df_2 <- left_join(subc_B_df, indv_phe) %>% left_join(samptab) 
 subc_b_df_2$SEX <- ifelse(subc_b_df_2$SEX == 1, "Male", "Female")
 
 subc_B_plot <- ggplot(subc_b_df_2, aes(SEX, `B.1 Zscore`, fill = SEX)) +
@@ -667,14 +670,14 @@ subc_B_plot <- ggplot(subc_b_df_2, aes(SEX, `B.1 Zscore`, fill = SEX)) +
   theme_classic() +
   theme(legend.position = "none")
 
-subc_sex_model <- lm(`B.1 Zscore` ~ SEX + BMI, data =subc_b_df_2)
+subc_sex_model <- lm(`B.1 Zscore` ~ SEX + BMI + SMTSISCH, data =subc_b_df_2)
 tidy_sub_model <- tidy(subc_sex_model)
 sub_table <- ggtexttable(tidy_sub_model)
 sub_df <- tidy_sub_model
 
 #### Male female cluster B Visc
 visc_B_df$SUBJID <- shorter_gtex_names_vect(visc_B_df, col = 1)
-visc_b_df_2 <- left_join(visc_B_df, indv_phe) 
+visc_b_df_2 <- left_join(visc_B_df, indv_phe) %>% left_join(samptab)
 visc_b_df_2$SEX <- ifelse(visc_b_df_2$SEX == 1, "Male", "Female")
 
 visc_B_plot <- ggplot(visc_b_df_2, aes(SEX, `B.1 Zscore`, fill = SEX)) +
@@ -687,7 +690,7 @@ visc_B_plot <- ggplot(visc_b_df_2, aes(SEX, `B.1 Zscore`, fill = SEX)) +
 
 visc_B_plot
 
-visc_sex_model <- lm(`B.1 Zscore` ~ SEX + BMI, data =visc_b_df_2)
+visc_sex_model <- lm(`B.1 Zscore` ~ SEX + BMI + SMTSISCH, data =visc_b_df_2)
 tidy_visc_model <- tidy(visc_sex_model)
 visc_table <- ggtexttable(tidy_visc_model)
 
@@ -806,12 +809,26 @@ write.csv(tidy_sub_model, "output/suppl_table_B_cluster_function_of_sex_sub.csv"
 write.csv(tidy_visc_model, "output/suppl_table_B_cluster_function_of_sex_visc.csv")
 write.csv(sub_coeff_tab, "output/suppl_table_percent_fat_function_of_sex_n_clust_sub.csv")
 
-library(xlsx)
-write.xlsx(as.data.frame(tidy_sub_model), file="output/suppl_table_fat.xlsx", sheetName="B function of Sex Sub", row.names=F)
-write.xlsx(as.data.frame(tidy_visc_model), file="output/suppl_table_fat.xlsx", sheetName="B function of Sex Visc", row.names=F, append = T)
-write.xlsx(as.data.frame(sub_coeff_tab), file="output/suppl_table_fat.xlsx", sheetName="Fat percent function of B Sub", row.names=F, append = T)
-write.xlsx(as.data.frame(visc_coeff_tab), file="output/suppl_table_fat.xlsx", sheetName="Fat percent function of B Visc", row.names=F, append = T)
-
+#library(xlsx)
+# write.xlsx(as.data.frame(tidy_sub_model), file="output/suppl_table_fat.xlsx", sheetName="B function of Sex Sub", rowNames=F,overwrite = T)
+# write.xlsx(as.data.frame(tidy_visc_model), file="output/suppl_table_fat.xlsx", sheetName="B function of Sex Visc", rowNames=F, append = T, overwrite = T)
+# write.xlsx(as.data.frame(sub_coeff_tab), file="output/suppl_table_fat.xlsx", sheetName="Fat percent function of B Sub", rowNames=F, append = T,overwrite = T)
+# write.xlsx(as.data.frame(visc_coeff_tab), file="output/suppl_table_fat.xlsx", sheetName="Fat percent function of B Visc", rowNames=F, append = T,overwrite = T)
+library(openxlsx)
+wb <- createWorkbook()
+addWorksheet(wb, "B function of Sex ADPSBQ")
+addWorksheet(wb, "B function of Sex ADPVSC")
+addWorksheet(wb, "Fat percent funct of B ADPSBQ")
+addWorksheet(wb, "Fat percent funct of B ADPVSC")
+writeData(wb, "B function of Sex ADPSBQ", as.data.frame(tidy_sub_model),
+          startRow = 1, startCol = 1)
+writeData(wb, "B function of Sex ADPVSC", as.data.frame(tidy_viscc_model),
+          startRow = 1, startCol = 1)
+writeData(wb, "Fat percent funct of B ADPSBQ", as.data.frame(sub_coeff_tab),
+          startRow = 1, startCol = 1)
+writeData(wb, "Fat percent funct of B ADPVSC", as.data.frame(visc_coeff_tab),
+          startRow = 1, startCol = 1)
+saveWorkbook(wb, file = "output/suppl_table_fat.xlsx", overwrite = TRUE)
 ```
 
 Adipose Sex Numbers
