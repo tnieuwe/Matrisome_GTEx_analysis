@@ -189,14 +189,14 @@ ggplot(beta_lm_all) +
   scale_y_discrete(limits = order_filt$r_names, labels = order_filt$abrreviated) +
   scale_x_discrete(limits = ordered_genes$Gene.Symbol) +
   geom_raster(aes(x = Gene.Symbol, y = -1,  fill = Category)) +
-  scale_fill_manual(values = c("#E66100", "#5D3A9B", "#E1BE6A", "#994F00")) +
+  scale_fill_manual(name = "Matrix category", values = c("#E66100", "#5D3A9B", "#E1BE6A", "#994F00")) +
   geom_point(aes(x = Gene.Symbol, y = top_tiss), shape = 8) +
   #geom_rect(aes(xmin = Gene.Symbol, xmax= lead(Gene.Symbol), ymin = -1, ymax =-.5, fill = division), position = ) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90)) +
-  xlab("Matrisome Genes") +
-  ylab("GTEx Tissues") +
-  labs(color = "Estimate Direction", size = "Beta Estimate")
+  xlab("Genes") +
+  ylab("Tissues") +
+  labs(color = "Estimate direction", size = "Beta Estimate")
 
 ggsave("output/fig_2a_top_beta_age_change_batch.pdf", width = 10, height = 7.5)
 #View(beta_lm_all %>% arrange(Gene.Symbol, top_tiss) %>% select(Gene.Symbol, top_tiss))
@@ -680,9 +680,11 @@ ggplot(hist_df, aes(x = reorder(abrreviated, total_n), y = n, fill = direction))
   theme_classic() +
  # geom_text(aes(label=n)) +
   #theme(axis.text.x = element_text(angle = 90)) +
-  scale_fill_manual(values = c("#FFC20A", "#0C7BDC")) +
+  scale_fill_manual(name = "Directionality",
+                    labels = c("Decreasing", "Increasing"),
+                    values = c("#FFC20A", "#0C7BDC")) +
   coord_flip() +
-  xlab("Tissue Abrreviation") +
+  xlab("Tissue") +
   ylab("Count of significant Ggnes") +
   labs(title = "Genes that change expression with age")
 ggsave("output/fig_S3_age_DE_genes_tiss_batch.pdf", width = 7, height = 8)
@@ -712,11 +714,12 @@ ggplot(hist_sex, aes(x = reorder(abrreviated, total_n), y = n, fill = direction)
   theme_classic() +
  # geom_text(aes(label=n)) +
   #theme(axis.text.x = element_text(angle = 90)) +
-  scale_fill_manual(values = c("#0C7BDC", "#FFC20A")) +
+  scale_fill_manual(name = "Directionality",
+                    labels = c("Female", "Male"),values = c("#0C7BDC", "#FFC20A")) +
   coord_flip() +
-  xlab("Tissue Abrreviation") +
-  ylab("Count of Sig Genes") +
-  labs(title = "Histogram of genes that associate with sex")
+  xlab("Tissue") +
+  ylab("Count of significant genes") +
+  labs(title = "Genes that change expression with sex")
 
 ggsave("output/fig_S4_sex_DE_genes_tiss_batch.pdf", width = 7, height = 8)
 
@@ -857,11 +860,12 @@ ordered_genes$r_names <- ordered_genes$tissue
 
 sex_p_size_plot <- ggplot(beta_lm_all) +
   geom_point(aes(x = Gene.Symbol, y = tissue, color = direction, size = estimate_abs)) +
-  scale_color_manual(values = c("#0C7BDC", "#FFC20A")) +
+  scale_color_manual(labels = c("Higher in Males", "Higher in Females"), 
+                     values = c("#0C7BDC", "#FFC20A")) +
   scale_y_discrete(limits = rev(ordered_genes$r_names), labels = rev(ordered_genes$abbreviated)) +
   scale_x_discrete(limits = unique(ordered_genes$Gene.Symbol)) +
   geom_tile(aes(x = Gene.Symbol, y = -1,  fill = Category)) +
-  scale_fill_manual(values = c(
+  scale_fill_manual(name = "Matrix category", values = c(
     "#E66100",
     "#5D3A9B", "#E1BE6A", "#994F00")) +
   geom_point(aes(x = Gene.Symbol, y = top_tiss), shape = 8) +
@@ -871,7 +875,7 @@ sex_p_size_plot <- ggplot(beta_lm_all) +
   xlab("Matrisome Genes") +
   ylab("GTEx Tissues") +
   scale_size_continuous(range = c(2,8)) +
-  labs(color = "Higher in", size = "Beta Estimate")
+  labs(color = "Estimate direction", size = "Beta Estimate")
 
 sex_b_size_plot
 ggsave("output/fig_4a_all_sex_pvalue_batch.pdf", width = 7,
