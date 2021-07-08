@@ -860,7 +860,7 @@ ordered_genes$r_names <- ordered_genes$tissue
 
 sex_p_size_plot <- ggplot(beta_lm_all) +
   geom_point(aes(x = Gene.Symbol, y = tissue, color = direction, size = estimate_abs)) +
-  scale_color_manual(labels = c("Higher in Males", "Higher in Females"), 
+  scale_color_manual(labels = c("Higher in Females","Higher in Males"), 
                      values = c("#0C7BDC", "#FFC20A")) +
   scale_y_discrete(limits = rev(ordered_genes$r_names), labels = rev(ordered_genes$abbreviated)) +
   scale_x_discrete(limits = unique(ordered_genes$Gene.Symbol)) +
@@ -974,7 +974,12 @@ ggsave("output/adipose_sex_difference_batch.pdf", width = 6, height = 12)
 subc_only <- adipose_sex %>% filter(tissue == "adipose_subcutaneous")
 sub_profiles_genes <- read.csv(file = "../../manual/adipose/adipose_subcutaneous-gene-clusters-high-variance_mat.csv")
 
-fat_ind <- (subc_only$Gene.Symbol %in% sub_profiles_genes$B.2)
+fat_ind <- (subc_only$Gene.Symbol %in% sub_profiles_genes$B.1)
+sum(fat_ind)
+subc_only[fat_ind,]
+
+## Find out how many genes overlap from clusters to DE
+fat_ind <- (subc_only$Gene.Symbol %in% sub_profiles_genes$B.1)
 sum(fat_ind)
 subc_only[fat_ind,]
 
@@ -1206,6 +1211,14 @@ ind <- !(dir_mat[,1] == 0 | dir_mat[,2] == 0)
 ind_2 <- (dir_mat[,1] == 0 | dir_mat[,2] == 0)
 dir_mat_ops <-  dir_mat[ind,]
 colSums(dir_mat[ind_2,] > 0 )
+
+## Get genes with most directionality
+for_directionality <- as.data.frame.matrix(dir_mat) %>% mutate(total = negative + positive) 
+for_directionality %>% filter(positive == 0) %>% arrange(desc(negative))
+for_directionality %>% filter(negative == 0) %>% arrange(desc(positive))
+## Least congruent
+as.data.frame.matrix(dir_mat) %>% mutate(difference = abs(negative - positive))  %>%
+  arrange((difference), desc(positive))
 
 #More positive or negative
 colSums(dir_mat)
