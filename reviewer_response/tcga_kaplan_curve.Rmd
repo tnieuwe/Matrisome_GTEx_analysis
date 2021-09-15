@@ -1,0 +1,47 @@
+---
+title: "VST kaplan mier curve"
+author: "Tim N"
+date: "9/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(recount3)
+```
+
+
+```{r}
+genes_of_int_high <- c("COL10A1", "MMP11", "COL11A1", "COMP", "SPP1", "MMP9", "MMP1", "CST1", "CTHRC1", "MMP7")
+genes_of_int_low <- c("MASP1", "PCOLCE2", "SRPX", "WISP2", "LGI4", "MMRN1", "OGN", "TNXB", "DPT", "ADAM33")
+cancers <- c("BRCA", "LUAD", "COAD", "THCA", "PRAD", "ESCA", "OV", "STAD", "PAAD", "LIHC")
+```
+
+```{r}
+human_projects <- available_projects()
+tcga_projects <- subset(human_projects, file_source == "tcga" & project %in% cancers)
+
+```
+Make projects in list
+```{r}
+rse_list <- list()
+for (cur_cancer in cancers) {
+    cur_proj <- subset(tcga_projects, project == cur_cancer)
+    cur_rse <- create_rse(cur_proj)
+    rse_list[[cur_cancer]] <- cur_rse
+}
+```
+
+```{r}
+for (cancer_ind in rse_list) {
+    cur_rse <- rse_list[[cancer_ind]]
+    rowRanges(cur_rse)[1:4,1:4]
+}
+```
+
