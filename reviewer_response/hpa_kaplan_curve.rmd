@@ -1,0 +1,69 @@
+---
+title: 'Reviewer request: Cancer Gene Biology'
+author: "Tim N"
+date: "9/14/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries
+```{r}
+require(hpar)
+require(tidyverse)
+```
+
+```{r}
+data(hpaCancer)
+genes_of_int_high <- c("COL10A1", "MMP11", "COL11A1", "COMP", "SPP1", "MMP9", "MMP1", "CST1", "CTHRC1", "MMP7")
+genes_of_int_low <- c("MASP1", "PCOLCE2", "SRPX", "WISP2", "LGI4", "MMRN1", "OGN", "TNXB", "DPT", "ADAM33")
+```
+
+
+```{r}
+high_dat <- filter(hpaCancer, Gene.name %in% genes_of_int_high)
+low_dat <- filter(hpaCancer, Gene.name %in%  genes_of_int_low)
+```
+High dat analysis
+```{r}
+high_dat <- high_dat %>%
+    mutate(bool_prognostic_favorable = prognostic.favorable < 0.05,
+           bool_prognostic_unfavorable = prognostic.unfavorable < 0.05,
+           bool_unprognostic_favorable = unprognostic.favorable < 0.05,
+           bool_unprognostic_unfavorable = unprognostic.unfavorable < 0.05,
+           general_prog = case_when(
+               bool_prognostic_favorable == TRUE~ "prog_favorable",
+               bool_prognostic_unfavorable == TRUE~ "prog_unfavorable",
+               bool_unprognostic_favorable == TRUE~ "unprog_favorable",
+               bool_unprognostic_unfavorable == TRUE~ "unprog_unfavorable",
+               TRUE ~ "none")) %>%
+    filter(Cancer %in% c("lung cancer", "breast cancer", "colorectal cancer", "thyroid cancer", "prostate cancer", "ovarian cancer", "stomach cancer", "pancreatic cancer", "liver cancer"))
+
+table(high_dat$general_prog)
+table(high_dat$Gene.name, high_dat$general_prog)
+table(high_dat$Cancer, high_dat$general_prog)
+```
+
+Low dat analysis
+```{r}
+low_dat <- low_dat %>%
+    mutate(bool_prognostic_favorable = prognostic.favorable < 0.05,
+           bool_prognostic_unfavorable = prognostic.unfavorable < 0.05,
+           bool_unprognostic_favorable = unprognostic.favorable < 0.05,
+           bool_unprognostic_unfavorable = unprognostic.unfavorable < 0.05,
+           general_prog = case_when(
+               bool_prognostic_favorable == TRUE~ "prog_favorable",
+               bool_prognostic_unfavorable == TRUE~ "prog_unfavorable",
+               bool_unprognostic_favorable == TRUE~ "unprog_favorable",
+               bool_unprognostic_unfavorable == TRUE~ "unprog_unfavorable",
+               TRUE ~ "none")) %>%
+    filter(Cancer %in% c("lung cancer", "breast cancer", "colorectal cancer", "thyroid cancer", "prostate cancer", "ovarian cancer", "stomach cancer", "pancreatic cancer", "liver cancer"))
+
+
+table(low_dat$general_prog)
+table(low_dat$Gene.name, low_dat$general_prog)
+table(low_dat$Cancer, low_dat$general_prog)
+```
+
