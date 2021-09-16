@@ -79,9 +79,19 @@ for (cancer_ind in seq_along(rse_list)) {
     h_l_list <- list()
     h_l_list[["high"]] <- high_vst
     h_l_list[["low"]] <- low_vst
+    z_score_out <- NULL
     ### 4. Create two Z-scores for the high gene list and low
+    for (vst_ind in seq_along(h_l_list)) {
+        hl_vst <- h_l_list[[vst_ind]]
+        hl_vst_centered <- sweep(hl_vst, MARGIN = 1, STATS = rowMeans(hl_vst), FUN = "-")
+        hl_vst_centered_standard <- sweep(hl_vst_centered, MARGIN = 1,
+                                          STATS = sd(hl_vst_centered), FUN = "/")
+        z_score_out <- cbind(z_score_out, colMeans(hl_vst_centered_standard))
+    }
+    colnames(z_score_out) <- paste0(names(h_l_list), sep = "_zscore")
     ### 5. Create a Kaplan mier curve result and plot and store it in a nested
     ###     list.
+    
 }
 ```
 
