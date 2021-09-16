@@ -12,7 +12,7 @@ the top 10 genes and a respective Z-score.
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-
+Load librarries
 ```{r}
 library(tidyverse)
 library(DESeq2)
@@ -45,16 +45,55 @@ This is the main loop, we will be using this to begin our analysis of the RNA-se
 and save the results
 ```{r}
 result_list <- list()
-for (cancer_ind in rse_list) {
+for (cancer_ind in seq_along(rse_list)) {
     ### 1. Pull out the data required
     ## Pull out the first cancer
     cur_rse <- rse_list[[cancer_ind]]
     rowRanges(cur_rse)[1:4,1:4]
+    colData(cur_rse)[1:4,1:10]
+    cur_counts <- assay(cur_rse)
     ### 2. Normalize the data using a vst
+    cur_vst <- vst(cur_counts)
+    ## Pull row data
+    cur_row_dat <- rowRanges(cur_rse)
     ### 3. Filter the data to genes we care about
+    ## High genes
+    high_ind <- (cur_row_dat$gene_name %in% genes_of_int_high &
+                     startsWith(as.character(as.data.frame(cur_row_dat)$seqnames), "chr"))
+    high_rownames <- rowRanges(cur_rse)[high_ind,]
+    high_vst <- cur_vst[high_ind,]
+    if (identical(names(high_rownames), row.names(high_vst)) == FALSE) {
+        stop()
+    }
+    row.names(high_vst) <- high_rownames$gene_name
+    ## Low genes
+    low_ind <- (cur_row_dat$gene_name %in% genes_of_int_low &
+                     startsWith(as.character(as.data.frame(cur_row_dat)$seqnames), "chr"))
+    low_rownames <- rowRanges(cur_rse)[low_ind,]
+    low_vst <- cur_vst[low_ind,]
+    if (identical(names(low_rownames), row.names(low_vst)) == FALSE) {
+        stop()
+    }
+    row.names(low_vst) <- low_rownames$gene_name
+    ## put them into list
+    h_l_list <- list()
+    h_l_list[["high"]] <- high_vst
+    h_l_list[["low"]] <- low_vst
     ### 4. Create two Z-scores for the high gene list and low
     ### 5. Create a Kaplan mier curve result and plot and store it in a nested
     ###     list.
 }
+```
+
+Sanity checks
+```{r}
+mmp11_ind <- (rowRanges(cur_rse)$gene_name %in% "MMP11")
+rowRanges(cur_rse)[mmp11_ind,]
+
+
+mmp_dat <- as.data.frame(t(cur_vst[mmp11_ind,]))
+
+plot(mmp_dat$ENSG00000275365.3, mmp_dat$ENSG00000099953.9)
+
 ```
 
