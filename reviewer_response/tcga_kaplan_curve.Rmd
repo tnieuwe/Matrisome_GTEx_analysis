@@ -127,11 +127,16 @@ for (tcga_ind in seq_along(rse_list)) {
     all_dat <- all_dat_pre_coding %>%
         mutate(
                ## Make status numweric
-               status = ifelse(tcga.cgc_follow_up_vital_status == "Alive",
-                               0, 1),
+               status = case_when(
+                   tcga.cgc_follow_up_vital_status == "Alive" ~ 0,
+                   tcga.cgc_follow_up_vital_status == "Dead" ~ 1,
+                   is.numeric(tcga.cgc_case_days_to_death) & is.na(tcga.cgc_follow_up_vital_status) ~ 1
+               ),
+               # status = ifelse(tcga.cgc_follow_up_vital_status == "Alive",
+               #                 0, 1),
                ## Change days to death to drop 0s
                days_to_death = ifelse(is.na(tcga.cgc_case_days_to_death),
-                                      ## Consider max date of death censor
+                                      ## Make follow up the censor date
                                      tcga.cgc_case_days_to_last_follow_up,
                                      tcga.cgc_case_days_to_death)) 
     
@@ -141,7 +146,7 @@ for (tcga_ind in seq_along(rse_list)) {
     
     high_fit <- survfit(Surv(high_dat$days_to_death,
                              event = high_dat$status) ~ high_group, data = high_dat)
-    low_fit <- survfit(Surv(tcga.cgc_case_days_to_death,
+    low_fit <- survfit(Surv(days_to_death,
                             status) ~ low_group, data = low_dat)
     high_plt <- survminer::ggsurvplot(high_fit) +
         labs(title = "Genes that increase in cancer Z-score survival",
@@ -170,17 +175,23 @@ PLot out
 pdf("data_out/kaplan_z_scores.pdf",width = "12", height = "15")
 for (tcga_ind in seq_along(result_list)) {
     ## Skip THCA
-    if (tcga_ind == 4) {
-        next()
-    }
+    # if (tcga_ind == 4) {
+    #     next()
+    # }
     cur_tcga <- names(result_list)[tcga_ind]
     high_plt <- result_list[[tcga_ind]][[1]]
     low_plt <- result_list[[tcga_ind]][[2]]
-    final_plot <- high_plt / low_plt + plot_annotation(title = cur_tcga)
+    final_plot <- high_plt$plot / low_plt$plot + plot_annotation(title = cur_tcga)
     print(final_plot)
 }
 dev.off()
 ```
+
+
+```{r}
+
+```
+
 
 
 
