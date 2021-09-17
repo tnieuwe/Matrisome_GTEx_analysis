@@ -17,6 +17,9 @@ Load librarries
 library(tidyverse)
 library(DESeq2)
 library(recount3)
+library(survival)
+library(ggfortify)
+library(patchwork)
 ```
 
 
@@ -44,14 +47,17 @@ for (cur_cancer in cancers) {
 This is the main loop, we will be using this to begin our analysis of the RNA-seq data
 and save the results
 ```{r}
+## To do: Use the upper and lower quantile of individuals
+## To do: Make sure people who survive stay in
 result_list <- list()
-for (cancer_ind in seq_along(rse_list)) {
+for (tcga_ind in seq_along(rse_list)) {
     ### 1. Pull out the data required
-    ## Pull out the first cancer
-    cur_rse <- rse_list[[cancer_ind]]
-    rowRanges(cur_rse)[1:4,1:4]
-    colData(cur_rse)[1:4,1:10]
-    cur_counts <- assay(cur_rse)
+    ## Pull out the first cancer type
+    cur_rse <- rse_list[[tcga_ind]]
+    ## Filter out normal and metastic
+    cur_coldat <- colData(cur_rse)
+    cancer_ind <- cur_coldat$tcga.cgc_sample_sample_type %in% "Primary Tumor"
+    cur_counts <- assay(cur_rse)[,cancer_ind]
     ### 2. Normalize the data using a vst
     cur_vst <- vst(cur_counts)
     ## Pull row data
@@ -91,9 +97,92 @@ for (cancer_ind in seq_along(rse_list)) {
     colnames(z_score_out) <- paste0(names(h_l_list), sep = "_zscore")
     ### 5. Create a Kaplan mier curve result and plot and store it in a nested
     ###     list.
+    filt_coldat <- as.data.frame(cur_coldat[cancer_ind,])
+    filt_coldat <- select(filt_coldat, starts_with("tcga.cgc")) %>%
+        rownames_to_column(var = "samp_id")
+    z_score_out <- as.data.frame(z_score_out) %>%
+        rownames_to_column(var = "samp_id")
+    all_dat_pre_coding <- left_join(z_score_out, filt_coldat) %>%
+        #filter(tcga.cgc_case_days_to_death != 0) %>%
+        mutate(high_group = ifelse(high_zscore > median(high_zscore),
+                                                        "high_exprs",
+                                                        "low_exprs"),
+               ## Make high and low quantiles
+               high_quant_split = case_when(
+                   high_zscore >= quantile(high_zscore, .75) ~ "High Z-score Exprs",
+                   high_zscore <= quantile(high_zscore, .25) ~ "Low Z-score Exprs",
+                   TRUE ~ "middle_exprs"
+               ),
+               low_quant_split = case_when(
+                   low_zscore >= quantile(low_zscore, .75) ~ "High Z-score Exprs",
+                   low_zscore <= quantile(low_zscore, .25) ~ "Low Z-score Exprs",
+                   TRUE ~ "middle_exprs"
+               ),
+               ## Low median group
+               low_group = ifelse(low_zscore > median(low_zscore),
+                                                        "high_exprs",
+                                                        "low_exprs")
+        )
+    ## Need to carefully change the data to fit the analysis
+    all_dat <- all_dat_pre_coding %>%
+        mutate(
+               ## Make status numweric
+               status = ifelse(tcga.cgc_follow_up_vital_status == "Alive",
+                               0, 1),
+               ## Change days to death to drop 0s
+               days_to_death = ifelse(is.na(tcga.cgc_case_days_to_death),
+                                      ## Consider max date of death censor
+                                     tcga.cgc_case_days_to_last_follow_up,
+                                     tcga.cgc_case_days_to_death)) 
     
+    
+    high_dat <- filter(all_dat, high_quant_split != "middle_exprs") 
+    low_dat <- filter(all_dat, low_quant_split != "middle_exprs")
+    
+    high_fit <- survfit(Surv(high_dat$days_to_death,
+                             event = high_dat$status) ~ high_group, data = high_dat)
+    low_fit <- survfit(Surv(tcga.cgc_case_days_to_death,
+                            status) ~ low_group, data = low_dat)
+    high_plt <- survminer::ggsurvplot(high_fit) +
+        labs(title = "Genes that increase in cancer Z-score survival",
+             subtitle = paste0(survminer::surv_pvalue(high_fit)$pval.txt,
+                               "; N high_exprs = ", high_fit$n[1],
+                               "; N low_exprs = ", high_fit$n[2]))
+    if (sum(low_fit$n )> 1) {
+       low_plt <- survminer::ggsurvplot(low_fit) +
+        labs(title = "Genes that decrease in cancer Z-score survival",
+             subtitle = paste0(survminer::surv_pvalue(low_fit)$pval.txt,
+                               "; N high_exprs = ", low_fit$n[1],
+                               "; N low_exprs = ", low_fit$n[2])) 
+    } else{
+        low_plt <- ggplot()
+    }
+    
+    plot_list <- list()
+    plot_list[["high_plot"]] <- high_plt
+    plot_list[["low_plot"]] <- low_plt
+    result_list[[names(rse_list)[tcga_ind]]] <- plot_list
 }
 ```
+
+PLot out
+```{r}
+pdf("data_out/kaplan_z_scores.pdf",width = "12", height = "15")
+for (tcga_ind in seq_along(result_list)) {
+    ## Skip THCA
+    if (tcga_ind == 4) {
+        next()
+    }
+    cur_tcga <- names(result_list)[tcga_ind]
+    high_plt <- result_list[[tcga_ind]][[1]]
+    low_plt <- result_list[[tcga_ind]][[2]]
+    final_plot <- high_plt / low_plt + plot_annotation(title = cur_tcga)
+    print(final_plot)
+}
+dev.off()
+```
+
+
 
 Sanity checks
 ```{r}
