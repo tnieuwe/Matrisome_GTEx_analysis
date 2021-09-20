@@ -52,10 +52,13 @@ and save the results
 result_list <- list()
 result_table <- NULL
 aova_df_out <-  NULL
+linear_model_df_out <- NULL
 for (tcga_ind in seq_along(rse_list)) {
     ### 1. Pull out the data required
     ## Pull out the first cancer type
     cur_rse <- rse_list[[tcga_ind]]
+    ## tcga cancer name
+    tcga_cancer_name <- names(rse_list)[tcga_ind]
     ## Filter out normal and metastic
     cur_coldat <- colData(cur_rse)
     cancer_ind <- cur_coldat$tcga.cgc_sample_sample_type %in% "Primary Tumor"
@@ -168,7 +171,7 @@ for (tcga_ind in seq_along(rse_list)) {
     plot_list <- list()
     plot_list[["high_plot"]] <- high_plt
     plot_list[["low_plot"]] <- low_plt
-    result_list[[names(rse_list)[tcga_ind]]] <- plot_list
+    result_list[[]] <- plot_list
     
     ## Table of results
     high_surv_medians <- survminer::surv_median(high_fit)[,1:2]
@@ -184,7 +187,7 @@ for (tcga_ind in seq_along(rse_list)) {
     }
     high_pval = survminer::surv_pvalue(high_fit)$pval
     high_sig = high_pval < 0.05
-    row_high <- cbind(high_higher_curve, high_pval, high_sig, "rank up genes", names(rse_list)[tcga_ind])
+    row_high <- cbind(high_higher_curve, high_pval, high_sig, "rank up genes", )
     
     low_surv_medians <- survminer::surv_median(low_fit)[,1:2]
     ## Catch if there aren't enough values for a median
@@ -199,7 +202,7 @@ for (tcga_ind in seq_along(rse_list)) {
     }
     low_pval = survminer::surv_pvalue(low_fit)$pval
     low_sig = low_pval < 0.05
-    row_low <- cbind(low_higher_curve, low_pval, low_sig, "rank down genes", names(rse_list)[tcga_ind])
+    row_low <- cbind(low_higher_curve, low_pval, low_sig, "rank down genes", )
     new_rows <- rbind(row_high, row_low)
     result_table <- rbind(result_table, new_rows)
     
@@ -225,8 +228,26 @@ for (tcga_ind in seq_along(rse_list)) {
     new_rows_aov <- NULL
     new_rows_aov <- rbind(high_anova, low_anova)
     new_rows_aov$rank_genes <- c("increase_in_cancer", "decrease_in_cancer")
-    new_rows_aov$tcga_cancer <- names(rse_list)[tcga_ind]
+    new_rows_aov$tcga_cancer <-
     aov_df_out <- rbind(aova_df_out, new_rows_aov)
+    ### Cancer stage ordinal linear models 
+    cancer_factor_levels <- c("Stage I", "Stage II",
+                              "Stage IIIA","Stage IIIB","Stage IIIC",
+                              "Stage IV", "Stage IVA","Stage IVB")
+    all_dat$pathologic_stage_factor <- factor(all_dat$tcga.cgc_case_pathologic_stage,
+                                                     levels = cancer_factor_levels,
+                                                     ordered = T)
+    stage_upreg_model <- lm(high_zscore ~ pathologic_stage_factor,
+                            data = all_dat)
+    lm_row_upreg <- cbind(broom::tidy(summary(stage_upreg_model))[2,],
+                    direction = "upregulated", tcga_cancer_name)
+    stage_downreg_model <- lm(low_zscore ~ pathologic_stage_factor,
+                            data = all_dat)
+    lm_row_downreg <- cbind(broom::tidy(summary(stage_downreg_model))[2,],
+                    direction ="downregulated", tcga_cancer_name)
+    
+    linear_model_df_out <- rbind(linear_model_df_out, lm_row_upreg, lm_row_downreg)
+    
 }
 ```
 
