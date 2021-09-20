@@ -171,7 +171,7 @@ for (tcga_ind in seq_along(rse_list)) {
     plot_list <- list()
     plot_list[["high_plot"]] <- high_plt
     plot_list[["low_plot"]] <- low_plt
-    result_list[[]] <- plot_list
+    result_list[[tcga_cancer_name]] <- plot_list
     
     ## Table of results
     high_surv_medians <- survminer::surv_median(high_fit)[,1:2]
@@ -187,7 +187,7 @@ for (tcga_ind in seq_along(rse_list)) {
     }
     high_pval = survminer::surv_pvalue(high_fit)$pval
     high_sig = high_pval < 0.05
-    row_high <- cbind(high_higher_curve, high_pval, high_sig, "rank up genes", )
+    row_high <- cbind(high_higher_curve, high_pval, high_sig, "rank up genes", tcga_cancer_name)
     
     low_surv_medians <- survminer::surv_median(low_fit)[,1:2]
     ## Catch if there aren't enough values for a median
@@ -202,7 +202,7 @@ for (tcga_ind in seq_along(rse_list)) {
     }
     low_pval = survminer::surv_pvalue(low_fit)$pval
     low_sig = low_pval < 0.05
-    row_low <- cbind(low_higher_curve, low_pval, low_sig, "rank down genes", )
+    row_low <- cbind(low_higher_curve, low_pval, low_sig, "rank down genes", tcga_cancer_name)
     new_rows <- rbind(row_high, row_low)
     result_table <- rbind(result_table, new_rows)
     
@@ -218,6 +218,11 @@ for (tcga_ind in seq_along(rse_list)) {
     #     ggforce::geom_sina() 
     # ggplot(all_dat, (aes(tcga.cgc_case_pathologic_stage, high_zscore))) +
     #     ggforce::geom_sina() 
+    
+    ## Prad and OVdoesn't have cancer stages
+    if (tcga_cancer_name %in% c("PRAD", "OV")) {
+        next()
+    }
     ### Cancer stage anovas
     high_anova <- broom::tidy(
         anova(aov(high_zscore ~ tcga.cgc_case_pathologic_stage,
@@ -231,6 +236,7 @@ for (tcga_ind in seq_along(rse_list)) {
     new_rows_aov$tcga_cancer <-
     aov_df_out <- rbind(aova_df_out, new_rows_aov)
     ### Cancer stage ordinal linear models 
+    
     cancer_factor_levels <- c("Stage I", "Stage II",
                               "Stage IIIA","Stage IIIB","Stage IIIC",
                               "Stage IV", "Stage IVA","Stage IVB")
@@ -267,7 +273,7 @@ for (tcga_ind in seq_along(result_list)) {
 }
 dev.off()
 ```
-Make a plot of the results
+Make a plot of the kaplan results
 
 ```{r}
 results_df <- as.data.frame(result_table) %>%
