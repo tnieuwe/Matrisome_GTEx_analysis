@@ -51,7 +51,7 @@ and save the results
 ## To do: Make sure people who survive stay in
 result_list <- list()
 result_table <- NULL
-aova_df_out <-  NULL
+anova_df_out <-  NULL
 linear_model_df_out <- NULL
 for (tcga_ind in seq_along(rse_list)) {
     ### 1. Pull out the data required
@@ -233,8 +233,9 @@ for (tcga_ind in seq_along(rse_list)) {
     new_rows_aov <- NULL
     new_rows_aov <- rbind(high_anova, low_anova)
     new_rows_aov$rank_genes <- c("increase_in_cancer", "decrease_in_cancer")
-    new_rows_aov$tcga_cancer <-
-    aov_df_out <- rbind(aova_df_out, new_rows_aov)
+    new_rows_aov$tcga_cancer <- tcga_cancer_name
+    anova_df_out <- rbind(anova_df_out, new_rows_aov)
+    
     ### Cancer stage ordinal linear models 
     
     cancer_factor_levels <- c("Stage I", "Stage II",
@@ -283,15 +284,30 @@ results_df <- as.data.frame(result_table) %>%
     dplyr::rename(greater_median = high_higher_curve,
                   pvalue = high_pval,
                   sig_pval = high_sig,
-                  rank_change_direction = V4,
-                  tcga_cancer = V5)
+                  rank_change_direction = V4) %>%
+    filter(tcga_cancer_name != "THCA")
 sig_results <- filter(results_df, corrected_pval_sig == TRUE)
 
 table(sig_results$tcga_cancer, sig_results$rank_change_direction)
 table(sig_results$greater_median, sig_results$rank_change_direction)
 ```
 
+Anova results
+```{r}
+anova_df_out <- anova_df_out %>% mutate(pval_adj = p.adjust(p.value, method = "fdr"),
+                        is_sig = pval_adj < 0.05)
+table(anova_df_out$is_sig)
+table(anova_df_out$is_sig, anova_df_out$rank_genes)
+table(anova_df_out$is_sig, anova_df_out$tcga_cancer)
+```
 
+```{r}
+linear_model_df_out <- linear_model_df_out %>% mutate(pval_adj = p.adjust(p.value, method = "fdr"),
+                        is_sig = pval_adj < 0.05)
+table(linear_model_df_out$is_sig)
+table(linear_model_df_out$is_sig, linear_model_df_out$direction)
+table(linear_model_df_out$is_sig, linear_model_df_out$tcga_cancer)
+```
 
 
 Sanity checks
