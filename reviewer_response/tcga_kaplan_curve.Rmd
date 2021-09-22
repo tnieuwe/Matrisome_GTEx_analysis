@@ -309,6 +309,15 @@ table(linear_model_df_out$is_sig, linear_model_df_out$direction)
 table(linear_model_df_out$is_sig, linear_model_df_out$tcga_cancer)
 ```
 
+Graph for response
+```{r}
+
+result_list$STAD$low_plot + labs(title = "Stomach Adenocarcinoma survival based on negative rank \nchange gene Z-score quartiles",
+                                 x= "Time (Days)")
+
+```
+
+
 
 Sanity checks
 ```{r}
