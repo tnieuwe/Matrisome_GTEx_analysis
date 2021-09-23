@@ -1,0 +1,120 @@
+---
+title: "Single Cell Fibroblast Analysis"
+author: "Tim N"
+date: "9/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(pheatmap)
+library(reshape2)
+library(ggforce)
+library(patchwork)
+```
+
+Join all data
+```{r}
+
+for (cur_ind in seq(7)) {
+    file_name = paste0("data_in/pan_cancer_", cur_ind,".csv")
+    cur_file <- read.csv(file_name)
+    if (cur_ind == 1) {
+        final_dat <- cur_file
+    } else{
+        final_dat <- left_join(final_dat, cur_file, by = "cellID")
+    }
+}
+## Fix MMP11
+final_dat <- final_dat %>% 
+    select(-MMP11.y) %>%
+    dplyr::rename(MMP11 = MMP11.x) %>%
+    select(cellID, Phenotype, everything())  %>%
+    filter(Phenotype != "Low quality")
+
+```
+
+```{r}
+cor_mat  <- cor(final_dat[,-1:-2])
+
+new_frame <- as.data.frame(c(rep("Rank Change Up", 10), rep("Rank Change Down", 10)))
+colnames(new_frame) <- "rank_change"
+rownames(new_frame) <- colnames(cor_mat)
+pheatmap(cor_mat,annotation_row = new_frame,
+         annotation_col = new_frame)
+```
+
+```{r}
+final_dat_plot <- final_dat %>% 
+    mutate(CAF_or_not = ifelse(str_detect(Phenotype, "CAF"), "CAF", "not_CAF")) %>%
+    select(cellID, Phenotype, CAF_or_not, everything())
+
+
+melted_plot <- final_dat_plot %>% melt(value.name = "normalized reads")
+
+temp_plot <- melted_plot %>% ggplot(., aes(x = CAF_or_not, y = `normalized reads`))  +
+    geom_violin() + facet_wrap(~variable)
+
+pdf(file = "data_out/sc_sina_plot.pdf",height = 20, width = 16)
+temp_plot
+dev.off()
+
+plot_list <- list()
+for (cur_gene in colnames(cor_mat)) {
+    cur_form <- paste0(cur_gene, "~ CAF_or_not")
+    rank_val <- new_frame[rownames(new_frame) == cur_gene,]
+    test_out <- wilcox.test(as.formula(cur_form), data = final_dat_plot)
+    summarized_means <- final_dat_plot %>% group_by(CAF_or_not) %>%
+        summarize(mean(!!sym(cur_gene)))
+    temp_sub = paste0("Pvalue = ", format.pval(test_out$p.value),
+                      "; CAF mean = ",
+                      round(summarized_means[summarized_means$CAF_or_not == "CAF", 2], 4),
+                      "; Non-CAF mean = ",
+                      round(summarized_means[summarized_means$CAF_or_not != "CAF", 2], 4))
+    # hold_plt <- ggplot(final_dat_plot, aes_string("CAF_or_not", cur_gene)) +
+    #                 geom_sina(alpha = 0.5) +
+    hold_plt <- ggplot(final_dat_plot, aes_string(fill = "CAF_or_not", x= cur_gene)) +
+                geom_histogram(alpha = 0.5,position = "identity") +
+         scale_y_log10() +
+        labs(title = paste0(cur_gene, "; ", rank_val),
+             subtitle = temp_sub) +
+        theme_classic()
+    plot_list[[cur_gene]] <- hold_plt
+    
+}
+
+pdf("data_out/sc_sina_plot_4.pdf", width = 6, height = 6)
+for (plot_ind in seq_along(plot_list)) {
+    print(plot_list[[plot_ind]])
+}
+dev.off()
+
+
+summed_plot <-melted_plot %>%
+    mutate(rank_change = ifelse(variable %in% rownames(new_frame)[1:10],
+                                "rank_up",
+                                "rank_down")) %>%
+    group_by(cellID, CAF_or_not, rank_change) %>%
+    summarize( summed_genes = sum(`normalized reads`))
+
+
+ggplot(summed_plot, aes(CAF_or_not, summed_genes)) +
+    geom_violin(alpha = 0.5) +
+    facet_grid(~rank_change) +
+    theme_classic()
+
+
+ggplot(summed_plot, aes(summed_genes, fill = CAF_or_not)) +
+    geom_histogram(alpha = 0.5,position="identity") +
+    facet_grid(~rank_change) +
+    theme_classic()
+
+summed_CAF <- filter(summed_plot)
+
+```
+
