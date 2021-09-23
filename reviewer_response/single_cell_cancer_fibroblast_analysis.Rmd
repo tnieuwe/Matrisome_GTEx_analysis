@@ -16,6 +16,7 @@ library(pheatmap)
 library(reshape2)
 library(ggforce)
 library(patchwork)
+library(ggpubr)
 ```
 
 Join all data
@@ -45,8 +46,14 @@ cor_mat  <- cor(final_dat[,-1:-2])
 new_frame <- as.data.frame(c(rep("Rank Change Up", 10), rep("Rank Change Down", 10)))
 colnames(new_frame) <- "rank_change"
 rownames(new_frame) <- colnames(cor_mat)
+color_list <- list( "rank_change"= c("Rank Change Up" = viridis::inferno(5)[2],
+                   "Rank Change Down" = viridis::inferno(5)[4]))
 pheatmap(cor_mat,annotation_row = new_frame,
-         annotation_col = new_frame)
+         annotation_col = new_frame,
+         annotation_colors = color_list,
+         filename = "data_out/sc_heatmap.pdf",
+         height = 8,
+         width = 11)
 ```
 
 ```{r}
@@ -65,6 +72,7 @@ temp_plot
 dev.off()
 
 plot_list <- list()
+result_table <- NULL
 for (cur_gene in colnames(cor_mat)) {
     cur_form <- paste0(cur_gene, "~ CAF_or_not")
     rank_val <- new_frame[rownames(new_frame) == cur_gene,]
@@ -76,6 +84,12 @@ for (cur_gene in colnames(cor_mat)) {
                       round(summarized_means[summarized_means$CAF_or_not == "CAF", 2], 4),
                       "; Non-CAF mean = ",
                       round(summarized_means[summarized_means$CAF_or_not != "CAF", 2], 4))
+    caf_mean = round(summarized_means[summarized_means$CAF_or_not == "CAF", 2], 4)
+    non_caf_mean = round(summarized_means[summarized_means$CAF_or_not != "CAF", 2], 4)
+    new_row <- cbind(cur_gene, broom::tidy(test_out),
+                     caf_mean, non_caf_mean)
+    colnames(new_row)[(ncol(new_row)-1):ncol(new_row)] <- c("CAF Mean", "Non-CAF Mean")
+    result_table <- rbind(result_table, new_row)
     ## Make log scaleable
     final_dat_plot[,cur_gene] <- final_dat_plot[,cur_gene] + 1
     ## Making plots histograms
@@ -84,7 +98,7 @@ for (cur_gene in colnames(cor_mat)) {
     max_x = max(final_dat_plot[,cur_gene])
     plot_caf <- ggplot(final_caf, aes_string(x = cur_gene)) +
         geom_histogram(fill = viridis::inferno(5)[2]) +
-        labs(y = "Count Log 10") +
+        labs(y = "") +
         scale_y_log10() +
         xlim(.9, max_x) +
         theme_classic() +
@@ -98,18 +112,19 @@ for (cur_gene in colnames(cor_mat)) {
              y = "Count Log 10") +
         scale_y_log10() +
         xlim(.9, max_x) +
-        theme_classic()
+        theme_classic() +
+        theme(axis.title.x = element_text(size = 6.5))
     hold_plt <- plot_caf/plot_non_caf
     
     plot_list[[cur_gene]] <- hold_plt
     
 }
 
-pdf("data_out/sc_sina_plot_4.pdf", width = 6, height = 6)
-for (plot_ind in seq_along(plot_list)) {
-    print(plot_list[[plot_ind]])
-}
-dev.off()
+# pdf("data_out/sc_sina_plot_4.pdf", width = 6, height = 6)
+# for (plot_ind in seq_along(plot_list)) {
+#     print(plot_list[[plot_ind]])
+# }
+# dev.off()
 
 
 summed_plot <-melted_plot %>%
@@ -134,8 +149,45 @@ ggplot(summed_plot, aes(summed_genes, fill = CAF_or_not)) +
 summed_CAF <- filter(summed_plot)
 
 ```
-New Plot
+Final plot and final table
 ```{r}
+# initial_top <- ((plot_list[[1]] + plot_list[[2]]) /
+#     (plot_list[[3]] + plot_list[[4]]) /
+#     (plot_list[[5]] + plot_list[[6]]))
+# 
+# 
+# pdf("data_out/final_plot.pdf", width = 8, height = 11)
+# print(initial_top)
+# dev.off()
 
+final_plot <- ggarrange(plot_list[[1]], plot_list[[2]], plot_list[[3]],
+          plot_list[[4]], plot_list[[5]], plot_list[[6]],
+           plot_list[[7]],  plot_list[[8]], plot_list[[9]],
+           plot_list[[10]], plot_list[[11]], plot_list[[12]],
+          plot_list[[13]], plot_list[[14]], plot_list[[15]],
+          plot_list[[16]], plot_list[[17]], plot_list[[18]],
+          plot_list[[19]], plot_list[[20]],
+                                    ncol =4, nrow =5)
+
+pdf("data_out/final_plot.pdf", width = 8, height = 11)
+print(final_plot)
+dev.off()
+
+result_table$rank_direction <- c(
+    rep("Rank Increase", 10),
+    rep("Rank Decrease", 10)
+)
+
+result_table <- result_table %>%
+    mutate(p_adjusted = p.adjust(p.value),
+           `Agrees with bulk` = case_when(
+               rank_direction == "Rank Increase" &
+                   `CAF Mean` > `Non-CAF Mean` ~ TRUE,
+               rank_direction == "Rank Decrease" &
+                   `CAF Mean` < `Non-CAF Mean` ~ TRUE,
+               TRUE ~ FALSE
+           ))
+
+write.csv(result_table, "data_out/single_cell_fibroblast_results.csv",row.names = F)
 ```
 
