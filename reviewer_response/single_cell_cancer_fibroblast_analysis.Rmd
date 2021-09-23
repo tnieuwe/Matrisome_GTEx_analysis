@@ -76,14 +76,31 @@ for (cur_gene in colnames(cor_mat)) {
                       round(summarized_means[summarized_means$CAF_or_not == "CAF", 2], 4),
                       "; Non-CAF mean = ",
                       round(summarized_means[summarized_means$CAF_or_not != "CAF", 2], 4))
-    # hold_plt <- ggplot(final_dat_plot, aes_string("CAF_or_not", cur_gene)) +
-    #                 geom_sina(alpha = 0.5) +
-    hold_plt <- ggplot(final_dat_plot, aes_string(fill = "CAF_or_not", x= cur_gene)) +
-                geom_histogram(alpha = 0.5,position = "identity") +
-         scale_y_log10() +
-        labs(title = paste0(cur_gene, "; ", rank_val),
-             subtitle = temp_sub) +
+    ## Make log scaleable
+    final_dat_plot[,cur_gene] <- final_dat_plot[,cur_gene] + 1
+    ## Making plots histograms
+    final_caf <- filter(final_dat_plot, CAF_or_not == "CAF")
+    final_non_caf <- filter(final_dat_plot, CAF_or_not != "CAF")
+    max_x = max(final_dat_plot[,cur_gene])
+    plot_caf <- ggplot(final_caf, aes_string(x = cur_gene)) +
+        geom_histogram(fill = viridis::inferno(5)[2]) +
+        labs(y = "Count Log 10") +
+        scale_y_log10() +
+        xlim(.9, max_x) +
+        theme_classic() +
+        theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+        
+    plot_non_caf <- ggplot(final_non_caf, aes_string(x = cur_gene)) +
+        geom_histogram(fill = viridis::inferno(5)[4]) +
+        labs(x = paste0("Normalized ", cur_gene," values + 1"),
+             y = "Count Log 10") +
+        scale_y_log10() +
+        xlim(.9, max_x) +
         theme_classic()
+    hold_plt <- plot_caf/plot_non_caf
+    
     plot_list[[cur_gene]] <- hold_plt
     
 }
@@ -115,6 +132,10 @@ ggplot(summed_plot, aes(summed_genes, fill = CAF_or_not)) +
     theme_classic()
 
 summed_CAF <- filter(summed_plot)
+
+```
+New Plot
+```{r}
 
 ```
 
