@@ -48,10 +48,15 @@ colnames(new_frame) <- "rank_change"
 rownames(new_frame) <- colnames(cor_mat)
 color_list <- list( "rank_change"= c("Rank Change Up" = viridis::inferno(5)[2],
                    "Rank Change Down" = viridis::inferno(5)[4]))
+
+cor_dist <- dist(1- cor_mat)
+cor_dend <- hclust(cor_dist, method = "average")
 pheatmap(cor_mat,annotation_row = new_frame,
          annotation_col = new_frame,
          annotation_colors = color_list,
-         filename = "data_out/sc_heatmap.pdf",
+         clustering_distance_rows = cor_dist,
+         clustering_distance_cols = cor_dist,
+         #filename = "data_out/sc_heatmap.pdf",
          height = 8,
          width = 11)
 ```
